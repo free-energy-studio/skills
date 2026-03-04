@@ -5,5 +5,8 @@
   "bin": {
     "ralph": "./scripts/ralph.js"
   },
+  "scripts": {
+    "postinstall": "node scripts/postinstall.js || true"
+  },
   "dependencies": {}
 }
