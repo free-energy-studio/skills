@@ -51,12 +51,12 @@ Every task requires a Linear ticket with enough detail that a developer with zer
 In Claude Code (in the project directory):
 
 ```
-/prd TICKET-ID
+/ralph TICKET-ID
 ```
 
 This creates `.ralph/prd.json` with atomic user stories. Review the output — stories should be small (1-3 files each), independently verifiable, and ordered by dependency.
 
-If `/prd` command is not available, run `bunx ralph-init` to set up the skill symlink.
+If `/ralph` command is not available, symlink the skill into `.claude/skills/ralph/`.
 
 ### 4. Run the Dev Workflow (Lobster)
 

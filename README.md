@@ -1,38 +1,22 @@
 # Ralph
 
-A skills repo for AI-powered development workflows. Three skills that work together: generate PRDs, execute them autonomously, and orchestrate the full dev lifecycle.
+A skills repo for AI-powered development workflows. Generate PRDs, execute them autonomously, and orchestrate the full dev lifecycle.
 
 ## Skills
 
-### `/ralph-prd` — PRD Generator
-Generate atomic user stories from Linear tickets or descriptions. Claude Code slash command that creates `.ralph/prd.json`.
+### `/ralph` — PRD Generator + Autonomous Agent
+Generate atomic user stories from Linear tickets or descriptions, then execute them.
 
 ```bash
-/ralph-prd DEN-381        # from Linear ticket
-/ralph-prd "Add auth"     # from description
-```
-
-### `/ralph` — Autonomous Coding Agent
-Loops Claude Code over user stories, implementing them one at a time with commits and PRs.
-
-```bash
-bun ralph 25        # run with 25 iteration max
+/ralph DEN-381        # generate PRD from Linear ticket
+/ralph "Add auth"     # generate PRD from description
+bun ralph 25          # run the agent loop (25 iterations max)
 ```
 
 ### `/dev-workflow` — Development Orchestration
-End-to-end flow: Ticket → PRD → Ralph → Bug Bot loop → QA handoff. Guides the full lifecycle from Linear ticket to merged PR.
+End-to-end flow: Ticket → PRD → Ralph → Bug Bot loop → QA handoff.
 
-## Installation
-
-```bash
-bun add github:free-energy-studio/ralph
-```
-
-Postinstall automatically:
-- Adds `.ralph/` to `.gitignore`
-- Symlinks the `/ralph-prd` skill into `.claude/skills/ralph-prd/`
-
-Manual setup: `bunx ralph-init`
+## Setup
 
 ### Requirements
 
@@ -40,14 +24,26 @@ Manual setup: `bunx ralph-init`
 - [Claude Code CLI](https://docs.anthropic.com/en/docs/claude-code) — authenticated
 - [GitHub CLI](https://cli.github.com/) (`gh`) — authenticated
 
+### Install the skill
+
+```bash
+# Global (all projects)
+ln -s /path/to/ralph ~/.claude/skills/ralph
+
+# Per-project
+ln -s /path/to/ralph .claude/skills/ralph
+```
+
+Add `.ralph/` to your project's `.gitignore`.
+
 ## Workflow
 
 ```
-Ticket → /ralph-prd → bun ralph → Bug Bot fix loop → QA Review → Merge
+Ticket → /ralph TICKET-ID → bun ralph → Bug Bot fix loop → QA Review → Merge
 ```
 
 1. **Ticket** — Linear ticket with full context
-2. **PRD** — `/ralph-prd TICKET-ID` generates atomic user stories
+2. **PRD** — `/ralph TICKET-ID` generates atomic user stories
 3. **Ralph** — `bun ralph 25` implements and opens PR
 4. **Bug Bot** — Cursor Bug Bot reviews, fix comments with another Ralph loop
 5. **QA** — Move to QA Review, assign reviewer
@@ -56,14 +52,10 @@ Ticket → /ralph-prd → bun ralph → Bug Bot fix loop → QA Review → Merge
 ## Repo Structure
 
 ```
-ralph-prd/                # PRD generation (Claude Code skill)
-  SKILL.md
-  README.md
-ralph/              # Agent loop + setup scripts
-  SKILL.md
+ralph/              # PRD skill + agent loop
+  SKILL.md          # Claude Code skill (PRD generation)
   scripts/
-    ralph.js        # The autonomous agent loop
-    init.js         # Project setup (gitignore + symlinks)
+    ralph.js        # Autonomous agent loop
 dev-workflow/       # Orchestration workflow
   SKILL.md
   references/
