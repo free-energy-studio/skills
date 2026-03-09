@@ -1,5 +1,11 @@
 {
   "name": "free-energy-skills",
   "private": true,
-  "workspaces": ["ralph", "linear", "dev-workflow", "firecrawl"]
+  "workspaces": [
+    "ralph",
+    "linear",
+    "dev-workflow",
+    "firecrawl"
+  ],
+  "version": "0.0.1"
 }
