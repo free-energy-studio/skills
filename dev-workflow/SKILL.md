@@ -76,16 +76,15 @@ Monitor progress: `tail -f .ralph/progress.txt`
 After Ralph finishes and the PR is up, use Claude Code's `/loop` to continuously monitor and fix Bug Bot comments:
 
 ```
-/loop 5m Check the open PR on this branch for Cursor Bug Bot review comments (comments starting with "###"). For each unresolved comment: read the file and line referenced, understand the issue, implement the fix, and commit. After fixing all comments, push. If there are no Bug Bot comments or all are resolved, report "All clean" and stop.
+/loop 5m Check the open PR on this branch for unresolved Cursor Bug Bot review comments. For each one: read the file and line referenced, understand the issue, implement the fix, and commit. After fixing all comments, push. If there are no unresolved Bug Bot comments, report "All clean — no unresolved Bug Bot comments" and stop.
 ```
 
 This will:
 1. Check for Bug Bot comments every 5 minutes
 2. Fix each comment automatically
 3. Push fixes and re-check on the next loop
-4. Stop when all comments are resolved
 
-**To stop early:** Press `Ctrl+C` or close the loop.
+The loop ends when there are no unresolved Bug Bot comments left. Once you see "All clean", move on to QA handoff.
 
 ### 6. QA Handoff
 
