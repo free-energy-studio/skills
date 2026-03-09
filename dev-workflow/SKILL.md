@@ -9,15 +9,20 @@ Deterministic development flow: Ticket → PRD → Ralph → Bug Bot loop → QA
 
 ## Prerequisites
 
-1. **Non-root dev user** — Claude Code refuses `--dangerously-skip-permissions` as root. All development work (git, file editing, ralph, claude code) must run as a dedicated non-root user (e.g. `dev`). Setup:
-   - Project files owned by this user (`chown -R dev:dev /projects/`)
-   - `gh auth login` completed (needed for push + PR creation)
-   - `claude` CLI installed and authenticated (OAuth)
-   - Root is only for system-level tasks (apt, services, openclaw)
+1. **Ralph installed globally** — Install via the skills repo:
+   ```bash
+   # One-liner from any machine
+   curl -fsSL https://raw.githubusercontent.com/free-energy-studio/skills/main/install.sh | bash -s ralph
 
-2. **Ralph installed** — `bun add github:free-energy-studio/ralph` in the target project. Postinstall handles `.gitignore` and `/prd` skill setup. If postinstall is blocked, run `bunx ralph-init`.
+   # Or manually
+   git clone https://github.com/free-energy-studio/skills.git ~/.local/share/free-energy-skills
+   cd ~/.local/share/free-energy-skills/ralph && bun install && bun link
+   ```
+   Verify: `which ralph` should return a path.
 
-Verify: `ls node_modules/ralph/ralph.js` and `.claude/skills/prd/` exists (symlink).
+2. **Claude Code CLI** — Installed and authenticated (`claude` in PATH)
+
+3. **GitHub CLI** — Authenticated (`gh auth status`)
 
 ## Flow
 
@@ -56,33 +61,37 @@ In Claude Code (in the project directory):
 
 This creates `.ralph/prd.json` with atomic user stories. Review the output — stories should be small (1-3 files each), independently verifiable, and ordered by dependency.
 
-If `/ralph` command is not available, symlink the skill into `.claude/skills/ralph/`.
+### 4. Run Ralph
 
-### 4. Run the Dev Workflow (Lobster)
-
-Run the full pipeline — Ralph + Bug Bot loop + QA handoff — as a single Lobster workflow:
-
-```
-Run the dev-workflow Lobster pipeline with ticket=DOMA-XXX
+```bash
+ralph 25
 ```
 
-This runs `dev-workflow.lobster` which:
-1. Runs Ralph (up to 25 iterations)
-2. Waits 5 minutes for Bug Bot to post
-3. Shows you Bug Bot comments and **pauses for approval**
-4. If you approve (comments addressed or none) → moves ticket to QA Review
-5. If you deny → fix the issues, update `.ralph/prd.json`, and re-run
+Ralph runs up to 25 iterations, implementing one user story per iteration. It creates a branch, opens a draft PR, and works through each story.
 
-**The approval gate is mandatory. You cannot skip to QA without explicitly approving.**
+Monitor progress: `tail -f .ralph/progress.txt`
 
-If Bug Bot finds issues after you approve:
-- Update `.ralph/prd.json` with the Bug Bot comments as new user stories
-- Re-run the Lobster workflow
-- Repeat until Bug Bot is clean
+### 5. Bug Bot Fix Loop
 
-### 5. QA Handoff
+After Ralph finishes and the PR is up, use Claude Code's `/loop` to continuously monitor and fix Bug Bot comments:
 
-Handled automatically by the Lobster workflow on approval. Ticket moves to **QA Review**.
+```
+/loop 5m Check the open PR on this branch for Cursor Bug Bot review comments (comments starting with "###"). For each unresolved comment: read the file and line referenced, understand the issue, implement the fix, and commit. After fixing all comments, push. If there are no Bug Bot comments or all are resolved, report "All clean" and stop.
+```
+
+This will:
+1. Check for Bug Bot comments every 5 minutes
+2. Fix each comment automatically
+3. Push fixes and re-check on the next loop
+4. Stop when all comments are resolved
+
+**To stop early:** Press `Ctrl+C` or close the loop.
+
+### 6. QA Handoff
+
+Once Bug Bot is clean:
+1. Move the Linear ticket to **QA Review**
+2. Mark the PR as ready for review: `gh pr ready`
 
 **Do not merge** — reviewer merges after approval.
 
