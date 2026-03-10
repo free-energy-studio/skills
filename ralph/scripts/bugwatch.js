@@ -178,7 +178,7 @@ if (!prNumber) {
 console.log(`   PR #${prNumber}\n`);
 
 async function waitForCheck() {
-  const maxWait = 5 * 60_000; // 5 min
+  const maxWait = 10 * 60_000; // 10 min
   const interval = 30_000;    // 30s
   const maxPolls = Math.ceil(maxWait / interval);
 
