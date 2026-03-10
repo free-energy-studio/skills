@@ -37,11 +37,12 @@ async function getBugbotCheckStatus() {
   const { stdout } = await run(
     `gh pr checks --json name,state --jq '.[] | select(.name == "${BUGBOT_CHECK_NAME}") | .state'`
   );
-  if (!stdout) return { running: false, passed: true }; // no check = nothing to do
+  if (!stdout) return { running: false, passed: false, notFound: true };
   // state values: PENDING, SUCCESS, FAILURE, NEUTRAL, SKIPPED, etc.
   return {
     running: stdout === "PENDING",
     passed: stdout === "SUCCESS" || stdout === "NEUTRAL",
+    notFound: false,
   };
 }
 
@@ -181,6 +182,11 @@ for (let i = 1; i <= MAX_ITERATIONS; i++) {
 
   // 1. Check if Bug Bot is still running
   const check = await getBugbotCheckStatus();
+  if (check.notFound) {
+    console.log("  ⏳ Bug Bot check not found yet — waiting for it to start...");
+    await Bun.sleep(POLL_INTERVAL);
+    continue;
+  }
   if (check.running) {
     console.log("  ⏳ Bug Bot is still running — waiting...");
     await Bun.sleep(POLL_INTERVAL);
