@@ -35,15 +35,30 @@ async function getPrNumber() {
 
 async function getBugbotCheckStatus() {
   const { stdout } = await run(
-    `gh pr checks --json name,state --jq '.[] | select(.name == "${BUGBOT_CHECK_NAME}") | .state'`
+    `gh pr checks --json name,state,bucket --jq '.[] | select(.name == "${BUGBOT_CHECK_NAME}") | {state, bucket}'`
   );
   if (!stdout) return { running: false, passed: false, notFound: true };
-  // state values: PENDING, SUCCESS, FAILURE, NEUTRAL, SKIPPED, etc.
-  return {
-    running: stdout === "PENDING",
-    passed: stdout === "SUCCESS" || stdout === "NEUTRAL",
-    notFound: false,
-  };
+  try {
+    const check = JSON.parse(stdout);
+    // state values: PENDING, SUCCESS, FAILURE, NEUTRAL, SKIPPED, etc.
+    return {
+      running: check.state === "PENDING",
+      passed: check.state === "SUCCESS" || check.state === "NEUTRAL",
+      notFound: false,
+    };
+  } catch {
+    return { running: false, passed: false, notFound: true };
+  }
+}
+
+async function getCurrentHeadSha() {
+  const { stdout } = await run("git rev-parse HEAD");
+  return stdout;
+}
+
+async function getPrHeadSha() {
+  const { stdout } = await run("gh pr view --json headRefOid --jq .headRefOid");
+  return stdout;
 }
 
 async function getUnresolvedBugbotComments() {
@@ -177,17 +192,33 @@ if (!prNumber) {
 }
 console.log(`   PR #${prNumber}\n`);
 
-async function waitForCheck() {
+async function waitForCheck(expectedSha) {
   const maxWait = 10 * 60_000; // 10 min
   const interval = 30_000;    // 30s
   const maxPolls = Math.ceil(maxWait / interval);
+  let sawPending = !expectedSha; // if no expected SHA, don't require PENDING phase
 
   for (let s = 1; s <= maxPolls; s++) {
+    // If we expect a specific commit, wait until the PR reflects it
+    if (expectedSha) {
+      const prSha = await getPrHeadSha();
+      if (prSha !== expectedSha) {
+        console.log(`  ⏳ PR still on old commit, waiting for ${expectedSha.slice(0, 7)}… (${s}/${maxPolls})`);
+        await Bun.sleep(interval);
+        continue;
+      }
+    }
+
     const status = await getBugbotCheckStatus();
     if (status.notFound) {
+      sawPending = true; // check hasn't appeared yet — new run hasn't started
       console.log(`  ⏳ Bug Bot check not found yet (${s}/${maxPolls})…`);
     } else if (status.running) {
+      sawPending = true; // check is running — this is the new run
       console.log(`  ⏳ Bug Bot is running (${s}/${maxPolls})…`);
+    } else if (!sawPending) {
+      // Check shows complete but we never saw it pending — stale result from old commit
+      console.log(`  ⏳ Stale check result, waiting for new run… (${s}/${maxPolls})`);
     } else {
       console.log("  ✓ Bug Bot has finished");
       return status;
@@ -197,11 +228,15 @@ async function waitForCheck() {
   return null; // timed out
 }
 
-for (let i = 1; i <= MAX_ITERATIONS; i++) {
-  console.log(`\n═══ Iteration ${i}/${MAX_ITERATIONS} ═══\n`);
+let expectedSha = null; // first iteration: accept whatever check is current
+let iteration = 0;
 
-  // 1. Wait for Bug Bot to appear and finish
-  const check = await waitForCheck();
+while (iteration < MAX_ITERATIONS) {
+  iteration++;
+  console.log(`\n═══ Iteration ${iteration}/${MAX_ITERATIONS} ═══\n`);
+
+  // 1. Wait for Bug Bot to appear and finish (on the expected commit)
+  const check = await waitForCheck(expectedSha);
   if (!check) {
     console.error("❌ Timed out waiting for Bug Bot — is it configured for this repo?");
     process.exit(1);
@@ -214,45 +249,42 @@ for (let i = 1; i <= MAX_ITERATIONS; i++) {
     process.exit(0);
   }
 
-  console.log(`  📝 ${comments.length} unresolved comment(s):\n`);
-  for (const c of comments) {
-    console.log(`     ${c.path}${c.line ? `:${c.line}` : ""}`);
-    console.log(`     ${extractBugDescription(c.body).slice(0, 100)}\n`);
-  }
+  console.log(`  📝 ${comments.length} unresolved comment(s)\n`);
 
-  // 3. Build prompt with specific comments
-  const commentDetails = comments
-    .map(
-      (c) =>
-        `Thread ID: ${c.threadId}\nFile: ${c.path}${c.line ? ` (line ${c.line})` : ""}\nIssue: ${extractBugDescription(c.body)}`
-    )
-    .join("\n\n");
+  // 3. Process one comment at a time, each in its own Claude instance
+  for (const comment of comments) {
+    if (iteration > MAX_ITERATIONS) break;
 
-  const prompt = `You are reviewing Cursor Bug Bot comments on a PR. Evaluate each comment and decide whether to FIX or DISMISS it.
+    console.log(`\n  ── Bug ${iteration}/${MAX_ITERATIONS} ──`);
+    console.log(`     ${comment.path}${comment.line ? `:${comment.line}` : ""}`);
+    console.log(`     ${extractBugDescription(comment.body).slice(0, 100)}\n`);
 
-Here are the unresolved comments:
+    const prompt = `You are reviewing a single Cursor Bug Bot comment on a PR. Evaluate it and decide whether to FIX or DISMISS it.
 
-${commentDetails}
+Thread ID: ${comment.threadId}
+File: ${comment.path}${comment.line ? ` (line ${comment.line})` : ""}
+Issue: ${extractBugDescription(comment.body)}
 
-For each comment:
+Steps:
 1. Read the file referenced and surrounding context
 2. Evaluate the issue — is it a real bug, or a false positive?
 3. If VALID: implement the fix
 4. If INVALID (false positive, already handled, not applicable): reply to the thread explaining why, then resolve it:
-   gh api graphql -f query='mutation { addPullRequestReviewThreadReply(input: {pullRequestReviewThreadId: "THREAD_ID", body: "Dismissed: [brief reason]"}) { comment { id } } }'
-   gh api graphql -f query='mutation { resolveReviewThread(input: {threadId: "THREAD_ID"}) { thread { isResolved } } }'
+   gh api graphql -f query='mutation { addPullRequestReviewThreadReply(input: {pullRequestReviewThreadId: "${comment.threadId}", body: "Dismissed: [brief reason]"}) { comment { id } } }'
+   gh api graphql -f query='mutation { resolveReviewThread(input: {threadId: "${comment.threadId}"}) { thread { isResolved } } }'
 
-After processing all comments:
-1. Run typecheck to verify (if any fixes were made)
-2. git add -A && git commit -m "fix: address Bug Bot review comments" (if any fixes were made)
-3. git push (if any fixes were made)`;
+After processing:
+1. Run typecheck to verify (if a fix was made)
+2. git add -A && git commit -m "fix: ${comment.path}${comment.line ? `:${comment.line}` : ""} — address Bug Bot comment" (if a fix was made)
+3. git push (if a fix was made)`;
 
-  // 4. Run Claude to fix (pushes if changes made)
-  await runClaude(prompt);
+    await runClaude(prompt);
+    iteration++;
+  }
 
-  // 5. Brief pause before next iteration to let new check register
-  console.log("\n  ⏳ Waiting for new Bug Bot run…");
-  await Bun.sleep(30_000);
+  // 4. Record current HEAD so next iteration waits for this commit's check
+  expectedSha = await getCurrentHeadSha();
+  console.log(`\n  ⏳ Waiting for Bug Bot to run on ${expectedSha.slice(0, 7)}…`);
 }
 
 console.log("\n⚠️ Max iterations reached — some comments may remain unresolved");
