@@ -40,9 +40,10 @@ async function getBugbotCheckStatus() {
   if (!stdout) return { running: false, passed: false, notFound: true };
   try {
     const check = JSON.parse(stdout);
-    // state values: PENDING, SUCCESS, FAILURE, NEUTRAL, SKIPPED, etc.
+    // state values from gh pr checks: PENDING, IN_PROGRESS, SUCCESS, FAILURE, NEUTRAL, SKIPPED, etc.
+    const running = check.state === "PENDING" || check.state === "IN_PROGRESS" || check.bucket === "pending";
     return {
-      running: check.state === "PENDING",
+      running,
       passed: check.state === "SUCCESS" || check.state === "NEUTRAL",
       notFound: false,
     };
@@ -193,7 +194,7 @@ if (!prNumber) {
 console.log(`   PR #${prNumber}\n`);
 
 async function waitForCheck(expectedSha) {
-  const maxWait = 10 * 60_000; // 10 min
+  const maxWait = 20 * 60_000; // 20 min
   const interval = 30_000;    // 30s
   const maxPolls = Math.ceil(maxWait / interval);
   let sawPending = !expectedSha; // if no expected SHA, don't require PENDING phase
@@ -251,7 +252,10 @@ while (iteration < MAX_ITERATIONS) {
 
   console.log(`  📝 ${comments.length} unresolved comment(s)\n`);
 
-  // 3. Process one comment at a time, each in its own Claude instance
+  // 3. Record SHA before processing so we can detect if a push happened
+  const shaBeforeProcessing = await getCurrentHeadSha();
+
+  // 4. Process one comment at a time, each in its own Claude instance
   for (const comment of comments) {
     if (iteration > MAX_ITERATIONS) break;
 
@@ -276,15 +280,27 @@ Steps:
 After processing:
 1. Run typecheck to verify (if a fix was made)
 2. git add -A && git commit -m "fix: ${comment.path}${comment.line ? `:${comment.line}` : ""} — address Bug Bot comment" (if a fix was made)
-3. git push (if a fix was made)`;
+3. Do NOT push — the outer loop will push all fixes at once`;
 
     await runClaude(prompt);
     iteration++;
   }
 
-  // 4. Record current HEAD so next iteration waits for this commit's check
-  expectedSha = await getCurrentHeadSha();
-  console.log(`\n  ⏳ Waiting for Bug Bot to run on ${expectedSha.slice(0, 7)}…`);
+  // 5. Push once after all comments in this batch are processed
+  const shaAfterProcessing = await getCurrentHeadSha();
+  if (shaAfterProcessing !== shaBeforeProcessing) {
+    console.log("\n  📤 Pushing all fixes…");
+    const { code } = await run("git push");
+    if (code !== 0) {
+      console.error("  ❌ git push failed");
+      process.exit(1);
+    }
+    expectedSha = shaAfterProcessing;
+    console.log(`  ⏳ Waiting for Bug Bot to run on ${expectedSha.slice(0, 7)}…`);
+  } else {
+    expectedSha = null; // no fixes made, don't wait for a new check
+    console.log("\n  ℹ️  No fixes made — re-checking comments…");
+  }
 }
 
 console.log("\n⚠️ Max iterations reached — some comments may remain unresolved");
