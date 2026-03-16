@@ -33,22 +33,24 @@ async function getPrNumber() {
   return parseInt(stdout, 10);
 }
 
-async function getBugbotCheckStatus() {
+async function getChecksStatus() {
   const { stdout } = await run(
-    `gh pr checks --json name,state,bucket --jq '.[] | select(.name == "${BUGBOT_CHECK_NAME}") | {state, bucket}'`
+    `gh pr checks --json name,state,bucket`
   );
-  if (!stdout) return { running: false, passed: false, notFound: true };
+  if (!stdout) return { allDone: false, bugbotFound: false, anyRunning: true };
   try {
-    const check = JSON.parse(stdout);
-    // state values from gh pr checks: PENDING, IN_PROGRESS, SUCCESS, FAILURE, NEUTRAL, SKIPPED, etc.
-    const running = check.state === "PENDING" || check.state === "IN_PROGRESS" || check.bucket === "pending";
+    const checks = JSON.parse(stdout);
+    const bugbot = checks.find((c) => c.name === BUGBOT_CHECK_NAME);
+    const anyRunning = checks.some(
+      (c) => c.state === "PENDING" || c.state === "IN_PROGRESS" || c.bucket === "pending"
+    );
     return {
-      running,
-      passed: check.state === "SUCCESS" || check.state === "NEUTRAL",
-      notFound: false,
+      allDone: !anyRunning,
+      bugbotFound: !!bugbot,
+      anyRunning,
     };
   } catch {
-    return { running: false, passed: false, notFound: true };
+    return { allDone: false, bugbotFound: false, anyRunning: true };
   }
 }
 
@@ -210,18 +212,18 @@ async function waitForCheck(expectedSha) {
       }
     }
 
-    const status = await getBugbotCheckStatus();
-    if (status.notFound) {
-      sawPending = true; // check hasn't appeared yet — new run hasn't started
+    const status = await getChecksStatus();
+    if (!status.bugbotFound) {
+      sawPending = true; // checks haven't appeared yet — new run hasn't started
       console.log(`  ⏳ Bug Bot check not found yet (${s}/${maxPolls})…`);
-    } else if (status.running) {
-      sawPending = true; // check is running — this is the new run
-      console.log(`  ⏳ Bug Bot is running (${s}/${maxPolls})…`);
+    } else if (status.anyRunning) {
+      sawPending = true; // checks are still running
+      console.log(`  ⏳ Checks still running (${s}/${maxPolls})…`);
     } else if (!sawPending) {
-      // Check shows complete but we never saw it pending — stale result from old commit
-      console.log(`  ⏳ Stale check result, waiting for new run… (${s}/${maxPolls})`);
+      // All checks done but we never saw them pending — stale results from old commit
+      console.log(`  ⏳ Stale check results, waiting for new run… (${s}/${maxPolls})`);
     } else {
-      console.log("  ✓ Bug Bot has finished");
+      console.log("  ✓ All checks have finished");
       return status;
     }
     await Bun.sleep(interval);
