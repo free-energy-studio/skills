@@ -30,8 +30,9 @@ async function getTeamId(key: string = DEFAULT_TEAM): Promise<string> {
 }
 
 async function resolveIssue(identifier: string) {
-  const [teamKey, numStr] = identifier.toUpperCase().split("-");
-  const num = parseInt(numStr);
+  const parts = identifier.toUpperCase().split("-");
+  const teamKey = parts[0];
+  const num = parseInt(parts[1] ?? "");
   if (!teamKey || isNaN(num)) throw new Error(`Invalid issue identifier: ${identifier}`);
   const result = await linear.issues({
     filter: { number: { eq: num }, team: { key: { eq: teamKey } } },
@@ -39,6 +40,20 @@ async function resolveIssue(identifier: string) {
   const issue = result.nodes[0];
   if (!issue) throw new Error(`Issue ${identifier} not found`);
   return issue;
+}
+
+async function resolveUser(name: string) {
+  const users = await linear.users({ filter: { name: { containsIgnoreCase: name } } });
+  const user = users.nodes[0];
+  if (!user) throw new Error(`User "${name}" not found`);
+  return user;
+}
+
+async function resolveLabel(name: string) {
+  const labels = await linear.issueLabels({ filter: { name: { containsIgnoreCase: name } } });
+  const label = labels.nodes[0];
+  if (!label) throw new Error(`Label "${name}" not found`);
+  return label;
 }
 
 function priorityLabel(p: number) {
@@ -81,7 +96,7 @@ function formatIssue(i: { identifier: string; title: string; state?: { name: str
   return `[${pri}] ${i.identifier}: ${i.title} (${state})${who}`;
 }
 
-// ── commands ─────────────────────────────────────────────────────────────────
+// ── issue commands ───────────────────────────────────────────────────────────
 
 async function cmdMyIssues() {
   const me = await linear.viewer;
@@ -113,20 +128,45 @@ async function cmdTeam(teamKey?: string) {
 }
 
 async function cmdIssue(identifier: string) {
+  if (!identifier) throw new Error("Usage: issue <TEAM-123>");
   const i = await resolveIssue(identifier);
-  const [state, assignee, project, team, comments] = await Promise.all([
+  const [state, assignee, project, team, comments, labels, relations, inverseRelations, attachments] = await Promise.all([
     i.state,
     i.assignee,
     i.project,
     i.team,
     i.comments({ first: 5 }),
+    i.labels(),
+    i.relations(),
+    i.inverseRelations(),
+    i.attachments(),
   ]);
   console.log(`\n${i.identifier}: ${i.title}`);
   console.log(`State: ${state?.name ?? "?"} | Priority: ${priorityLabel(i.priority)} | Assignee: ${assignee?.name ?? "Unassigned"}`);
   console.log(`Project: ${project?.name ?? "None"} | Team: ${team?.name ?? "?"}`);
+  if (labels.nodes.length) {
+    console.log(`Labels: ${labels.nodes.map((l) => l.name).join(", ")}`);
+  }
   console.log(`Created: ${i.createdAt.toISOString().split("T")[0]}${i.dueDate ? ` | Due: ${i.dueDate}` : ""}`);
   console.log(`URL: ${i.url}`);
   if (i.description) console.log(`\n${i.description}`);
+  if (relations.nodes.length || inverseRelations.nodes.length) {
+    console.log("\n─── Relations ───");
+    for (const r of relations.nodes) {
+      const related = await r.relatedIssue;
+      console.log(`  ${r.type} → ${related?.identifier}: ${related?.title}`);
+    }
+    for (const r of inverseRelations.nodes) {
+      const source = await r.issue;
+      console.log(`  ${r.type} ← ${source?.identifier}: ${source?.title}`);
+    }
+  }
+  if (attachments.nodes.length) {
+    console.log("\n─── Attachments ───");
+    for (const a of attachments.nodes) {
+      console.log(`  ${a.title} — ${a.url}`);
+    }
+  }
   if (comments.nodes.length) {
     console.log("\n─── Comments ───");
     for (const c of comments.nodes) {
@@ -136,10 +176,16 @@ async function cmdIssue(identifier: string) {
   }
 }
 
-async function cmdCreate(title: string, description?: string, teamKey?: string) {
-  if (!title) throw new Error("Usage: create <title> [description] [--team TEAM_KEY]");
-  const teamId = await getTeamId(teamKey);
-  const result = await linear.createIssue({ teamId, title, description });
+async function cmdCreate(title: string, description: string | undefined, opts: Record<string, string>) {
+  if (!title) throw new Error("Usage: create <title> [description] [--team KEY] [--priority P] [--status S] [--assignee USER] [--label LABEL] [--due DATE]");
+  const teamId = await getTeamId(opts.team);
+  const input: Record<string, unknown> = { teamId, title, description };
+  if (opts.priority) input.priority = priorityNum(opts.priority);
+  if (opts.status) input.stateId = await getStateId(teamId, opts.status);
+  if (opts.assignee) input.assigneeId = (await resolveUser(opts.assignee)).id;
+  if (opts.label) input.labelIds = [(await resolveLabel(opts.label)).id];
+  if (opts.due) input.dueDate = opts.due;
+  const result = await linear.createIssue(input as Parameters<typeof linear.createIssue>[0]);
   const issue = await result.issue;
   if (!issue) throw new Error("Issue creation failed");
   console.log(`Created: ${issue.identifier} — ${issue.title}\n${issue.url}`);
@@ -174,15 +220,13 @@ async function cmdPriority(identifier: string, priorityName: string) {
 async function cmdAssign(identifier: string, userName: string) {
   if (!identifier || !userName) throw new Error("Usage: assign <TEAM-123> <username>");
   const issue = await resolveIssue(identifier);
-  const users = await linear.users({ filter: { name: { containsIgnoreCase: userName } } });
-  const user = users.nodes[0];
-  if (!user) throw new Error(`User "${userName}" not found`);
+  const user = await resolveUser(userName);
   await linear.updateIssue(issue.id, { assigneeId: user.id });
   console.log(`Assigned ${identifier} → ${user.name}`);
 }
 
 async function cmdUpdate(identifier: string, opts: Record<string, string>) {
-  if (!identifier) throw new Error("Usage: update <TEAM-123> --title '...' --description '...' --priority high --status todo");
+  if (!identifier) throw new Error("Usage: update <TEAM-123> --title '...' --description '...' --priority high --status todo --assignee USER --label LABEL --due DATE");
   const issue = await resolveIssue(identifier);
   const input: Record<string, unknown> = {};
   if (opts.title) input.title = opts.title;
@@ -192,19 +236,16 @@ async function cmdUpdate(identifier: string, opts: Record<string, string>) {
     const team = await issue.team;
     input.stateId = await getStateId(team!.id, opts.status);
   }
-  if (opts.assignee) {
-    const users = await linear.users({ filter: { name: { containsIgnoreCase: opts.assignee } } });
-    const user = users.nodes[0];
-    if (!user) throw new Error(`User "${opts.assignee}" not found`);
-    input.assigneeId = user.id;
-  }
+  if (opts.assignee) input.assigneeId = (await resolveUser(opts.assignee)).id;
+  if (opts.label) input.labelIds = [(await resolveLabel(opts.label)).id];
+  if (opts.due) input.dueDate = opts.due;
   await linear.updateIssue(issue.id, input as Parameters<typeof linear.updateIssue>[1]);
   console.log(`Updated ${identifier}`);
 }
 
 async function cmdSearch(query: string) {
   if (!query) throw new Error("Usage: search <query>");
-  const results = await linear.issueSearch(query, { first: 20 });
+  const results = await linear.issueSearch({ query, first: 20 });
   if (!results.nodes.length) { console.log("No results."); return; }
   for (const i of results.nodes) {
     const state = await i.state;
@@ -212,6 +253,228 @@ async function cmdSearch(query: string) {
     console.log(formatIssue({ ...i, state, assignee }));
   }
 }
+
+async function cmdArchive(identifier: string) {
+  if (!identifier) throw new Error("Usage: archive <TEAM-123>");
+  const issue = await resolveIssue(identifier);
+  await linear.archiveIssue(issue.id);
+  console.log(`Archived ${identifier}`);
+}
+
+async function cmdUnarchive(identifier: string) {
+  if (!identifier) throw new Error("Usage: unarchive <TEAM-123>");
+  const issue = await resolveIssue(identifier);
+  await linear.unarchiveIssue(issue.id);
+  console.log(`Unarchived ${identifier}`);
+}
+
+async function cmdDelete(identifier: string) {
+  if (!identifier) throw new Error("Usage: delete <TEAM-123>");
+  const issue = await resolveIssue(identifier);
+  await linear.deleteIssue(issue.id);
+  console.log(`Deleted ${identifier}`);
+}
+
+async function cmdRelate(fromId: string, toId: string, relationType: string) {
+  if (!fromId || !toId || !relationType) throw new Error("Usage: relate <ISSUE-1> <ISSUE-2> <blocks|relates-to|duplicates>");
+  const issue = await resolveIssue(fromId);
+  const related = await resolveIssue(toId);
+  const typeMap: Record<string, string> = {
+    blocks: "blocks",
+    "relates-to": "related",
+    related: "related",
+    duplicates: "duplicate",
+    duplicate: "duplicate",
+  };
+  const type = typeMap[relationType.toLowerCase()];
+  if (!type) throw new Error(`Unknown relation type: ${relationType}. Use: blocks|relates-to|duplicates`);
+  await linear.createIssueRelation({ issueId: issue.id, relatedIssueId: related.id, type: type as any });
+  console.log(`${fromId} ${relationType} ${toId}`);
+}
+
+// ── cycle commands ───────────────────────────────────────────────────────────
+
+async function cmdCycles(teamKey?: string) {
+  const teamId = await getTeamId(teamKey);
+  const team = await linear.team(teamId);
+  const cycles = await team.cycles({ first: 20 });
+  if (!cycles.nodes.length) { console.log("No cycles."); return; }
+  for (const c of cycles.nodes) {
+    const start = c.startsAt.toISOString().split("T")[0];
+    const end = c.endsAt.toISOString().split("T")[0];
+    const pct = Math.round(c.progress * 100);
+    const badge = c.isActive ? " [ACTIVE]" : c.isFuture ? " [FUTURE]" : "";
+    console.log(`#${c.number}${c.name ? ` ${c.name}` : ""} (${start} → ${end}) — ${pct}%${badge}`);
+  }
+}
+
+async function cmdCycleCurrent(teamKey?: string) {
+  const teamId = await getTeamId(teamKey);
+  const team = await linear.team(teamId);
+  const cycles = await team.cycles({ filter: { isActive: { eq: true } }, first: 1 });
+  const cycle = cycles.nodes[0];
+  if (!cycle) { console.log("No active cycle."); return; }
+  const start = cycle.startsAt.toISOString().split("T")[0];
+  const end = cycle.endsAt.toISOString().split("T")[0];
+  const pct = Math.round(cycle.progress * 100);
+  console.log(`\nCycle #${cycle.number}${cycle.name ? ` — ${cycle.name}` : ""}`);
+  console.log(`${start} → ${end} | ${pct}% complete\n`);
+  const issues = await cycle.issues({ first: 50 });
+  if (!issues.nodes.length) { console.log("No issues in this cycle."); return; }
+  for (const i of issues.nodes) {
+    const state = await i.state;
+    const assignee = await i.assignee;
+    console.log(formatIssue({ ...i, state, assignee }));
+  }
+}
+
+// ── label commands ───────────────────────────────────────────────────────────
+
+async function cmdLabels(teamKey?: string) {
+  if (teamKey) {
+    const teamId = await getTeamId(teamKey);
+    const team = await linear.team(teamId);
+    const labels = await team.labels({ first: 50 });
+    if (!labels.nodes.length) { console.log("No labels."); return; }
+    for (const l of labels.nodes) {
+      console.log(`${l.color ?? "—"} ${l.name}${l.description ? ` — ${l.description}` : ""}`);
+    }
+  } else {
+    const labels = await linear.issueLabels({ first: 50 });
+    if (!labels.nodes.length) { console.log("No labels."); return; }
+    for (const l of labels.nodes) {
+      const parent = await l.parent;
+      const group = parent ? ` (${parent.name})` : l.isGroup ? " [group]" : "";
+      console.log(`${l.color ?? "—"} ${l.name}${group}${l.description ? ` — ${l.description}` : ""}`);
+    }
+  }
+}
+
+async function cmdLabelCreate(name: string, opts: Record<string, string>) {
+  if (!name) throw new Error("Usage: label-create <name> [--color HEX] [--description TEXT] [--team KEY]");
+  const input: Record<string, unknown> = { name };
+  if (opts.color) input.color = opts.color;
+  if (opts.description) input.description = opts.description;
+  if (opts.team) input.teamId = await getTeamId(opts.team);
+  const result = await linear.createIssueLabel(input as Parameters<typeof linear.createIssueLabel>[0]);
+  const label = await result.issueLabel;
+  console.log(`Created label: ${label?.name} (${label?.color ?? "no color"})`);
+}
+
+// ── document commands ────────────────────────────────────────────────────────
+
+async function cmdDocs(opts: Record<string, string>) {
+  const docs = await linear.documents({ first: 20 });
+  if (!docs.nodes.length) { console.log("No documents."); return; }
+  for (const d of docs.nodes) {
+    const creator = await d.creator;
+    const project = await d.project;
+    const date = d.createdAt.toISOString().split("T")[0];
+    const proj = project ? ` [${project.name}]` : "";
+    console.log(`${d.title}${proj} — by ${creator?.name ?? "?"} (${date})`);
+    console.log(`  ${d.url}`);
+  }
+}
+
+async function cmdDoc(id: string) {
+  if (!id) throw new Error("Usage: doc <DOC_ID>");
+  const doc = await linear.document(id);
+  const [creator, project] = await Promise.all([doc.creator, doc.project]);
+  console.log(`\n${doc.title}`);
+  console.log(`By: ${creator?.name ?? "?"} | Project: ${project?.name ?? "None"}`);
+  console.log(`Created: ${doc.createdAt.toISOString().split("T")[0]}`);
+  console.log(`URL: ${doc.url}`);
+  if (doc.content) {
+    console.log(`\n${doc.content}`);
+  }
+}
+
+async function cmdDocCreate(title: string, opts: Record<string, string>) {
+  if (!title) throw new Error("Usage: doc-create <title> [--content MARKDOWN] [--project PROJECT_ID]");
+  const input: Record<string, unknown> = { title };
+  if (opts.content) input.content = opts.content;
+  if (opts.project) input.projectId = opts.project;
+  const result = await linear.createDocument(input as Parameters<typeof linear.createDocument>[0]);
+  const doc = await result.document;
+  console.log(`Created: ${doc?.title}\n${doc?.url}`);
+}
+
+// ── attachment commands ──────────────────────────────────────────────────────
+
+async function cmdAttachments(identifier: string) {
+  if (!identifier) throw new Error("Usage: attachments <TEAM-123>");
+  const issue = await resolveIssue(identifier);
+  const attachments = await issue.attachments();
+  if (!attachments.nodes.length) { console.log("No attachments."); return; }
+  for (const a of attachments.nodes) {
+    console.log(`${a.title} — ${a.url}${a.subtitle ? ` (${a.subtitle})` : ""}`);
+  }
+}
+
+async function cmdAttach(identifier: string, title: string, url: string, opts: Record<string, string>) {
+  if (!identifier || !title || !url) throw new Error("Usage: attach <TEAM-123> <title> <url> [--subtitle TEXT]");
+  const issue = await resolveIssue(identifier);
+  await linear.createAttachment({ issueId: issue.id, title, url, subtitle: opts.subtitle });
+  console.log(`Attachment "${title}" added to ${identifier}`);
+}
+
+// ── batch commands ───────────────────────────────────────────────────────────
+
+async function cmdBatchCreate(jsonInput: string, opts: Record<string, string>) {
+  if (!jsonInput) throw new Error("Usage: batch-create '<json>' [--team KEY]\nJSON: [{\"title\": \"...\", \"description?\": \"...\", \"priority?\": \"high\", \"status?\": \"todo\", \"assignee?\": \"Sam\", \"label?\": \"Bug\"}]");
+  let items: Array<{ title: string; description?: string; priority?: string; status?: string; assignee?: string; label?: string }>;
+  try {
+    items = JSON.parse(jsonInput);
+  } catch {
+    const file = Bun.file(jsonInput);
+    const text = await file.text();
+    items = JSON.parse(text);
+  }
+  if (!Array.isArray(items) || !items.length) throw new Error("JSON must be a non-empty array of issue objects");
+
+  const teamId = await getTeamId(opts.team);
+
+  // Cache lookups to avoid redundant API calls
+  const userCache = new Map<string, string>();
+  const labelCache = new Map<string, string>();
+  const stateCache = new Map<string, string>();
+
+  const issues: Array<Record<string, unknown>> = [];
+  for (const item of items) {
+    const input: Record<string, unknown> = { teamId, title: item.title };
+    if (item.description) input.description = item.description;
+    if (item.priority) input.priority = priorityNum(item.priority);
+    if (item.status) {
+      const key = item.status.toLowerCase();
+      if (!stateCache.has(key)) stateCache.set(key, await getStateId(teamId, item.status));
+      input.stateId = stateCache.get(key);
+    }
+    if (item.assignee) {
+      const key = item.assignee.toLowerCase();
+      if (!userCache.has(key)) userCache.set(key, (await resolveUser(item.assignee)).id);
+      input.assigneeId = userCache.get(key);
+    }
+    if (item.label) {
+      const key = item.label.toLowerCase();
+      if (!labelCache.has(key)) labelCache.set(key, (await resolveLabel(item.label)).id);
+      input.labelIds = [labelCache.get(key)];
+    }
+    issues.push(input);
+  }
+
+  const result = await (linear as any).createIssueBatch({ issues });
+  if (result.success) {
+    const created = await result.issues;
+    console.log(`Created ${created.length} issues:`);
+    for (const issue of created) {
+      console.log(`  ${issue.identifier}: ${issue.title}`);
+    }
+  } else {
+    throw new Error("Batch creation failed");
+  }
+}
+
+// ── team & project commands ──────────────────────────────────────────────────
 
 async function cmdProjects(teamKey?: string) {
   const teamId = await getTeamId(teamKey);
@@ -234,14 +497,14 @@ async function cmdStandup() {
   console.log("=== Daily Standup ===\n");
 
   const todos = await me.assignedIssues({ filter: { state: { type: { eq: "unstarted" } } }, first: 10 });
-  console.log("🎯 YOUR TODOS:");
+  console.log("YOUR TODOS:");
   for (const i of todos.nodes) {
     const state = await i.state;
     console.log(`  [${priorityLabel(i.priority)}] ${i.identifier}: ${i.title}`);
   }
 
   const inProgress = await me.assignedIssues({ filter: { state: { type: { eq: "started" } } }, first: 10 });
-  console.log("\n🚧 IN PROGRESS:");
+  console.log("\nIN PROGRESS:");
   for (const i of inProgress.nodes) {
     const state = await i.state;
     console.log(`  ${i.identifier}: ${i.title} (${state?.name})`);
@@ -251,7 +514,7 @@ async function cmdStandup() {
     filter: { state: { name: { in: ["Blocked", "Paused"] } } },
     first: 10,
   });
-  console.log("\n🔴 BLOCKED (team-wide):");
+  console.log("\nBLOCKED (team-wide):");
   for (const i of blocked.nodes) {
     const assignee = await i.assignee;
     console.log(`  ${i.identifier}: ${i.title} → ${assignee?.name ?? "unassigned"}`);
@@ -264,11 +527,12 @@ function parseFlags(args: string[]): { positional: string[]; flags: Record<strin
   const positional: string[] = [];
   const flags: Record<string, string> = {};
   for (let i = 0; i < args.length; i++) {
-    if (args[i].startsWith("--")) {
-      const key = args[i].slice(2);
+    const arg = args[i]!;
+    if (arg.startsWith("--")) {
+      const key = arg.slice(2);
       flags[key] = args[++i] ?? "true";
     } else {
-      positional.push(args[i]);
+      positional.push(arg);
     }
   }
   return { positional, flags };
@@ -279,35 +543,89 @@ function parseFlags(args: string[]): { positional: string[]; flags: Record<strin
 const { positional, flags } = parseFlags(args);
 
 try {
+  const p0 = positional[0] ?? "";
+  const p1 = positional[1] ?? "";
+  const p2 = positional[2] ?? "";
+
   switch (cmd) {
-    case "my-issues":   await cmdMyIssues(); break;
-    case "team":        await cmdTeam(positional[0] ?? flags.team); break;
-    case "teams":       await cmdTeams(); break;
-    case "issue":       await cmdIssue(positional[0]); break;
-    case "create":      await cmdCreate(positional[0], positional[1], flags.team); break;
-    case "comment":     await cmdComment(positional[0], positional[1]); break;
-    case "status":      await cmdStatus(positional[0], positional[1]); break;
-    case "priority":    await cmdPriority(positional[0], positional[1]); break;
-    case "assign":      await cmdAssign(positional[0], positional[1]); break;
-    case "update":      await cmdUpdate(positional[0], flags); break;
-    case "search":      await cmdSearch(positional.join(" ")); break;
-    case "projects":    await cmdProjects(positional[0] ?? flags.team); break;
-    case "standup":     await cmdStandup(); break;
+    // Issues
+    case "my-issues":     await cmdMyIssues(); break;
+    case "team":          await cmdTeam(p0 || flags.team); break;
+    case "issue":         await cmdIssue(p0); break;
+    case "create":        await cmdCreate(p0, p1 || undefined, flags); break;
+    case "update":        await cmdUpdate(p0, flags); break;
+    case "comment":       await cmdComment(p0, p1); break;
+    case "status":        await cmdStatus(p0, p1); break;
+    case "priority":      await cmdPriority(p0, p1); break;
+    case "assign":        await cmdAssign(p0, p1); break;
+    case "search":        await cmdSearch(positional.join(" ")); break;
+    case "archive":       await cmdArchive(p0); break;
+    case "unarchive":     await cmdUnarchive(p0); break;
+    case "delete":        await cmdDelete(p0); break;
+    case "relate":        await cmdRelate(p0, p1, p2); break;
+    case "batch-create":  await cmdBatchCreate(p0, flags); break;
+
+    // Cycles
+    case "cycles":        await cmdCycles(p0 || flags.team); break;
+    case "cycle-current": await cmdCycleCurrent(p0 || flags.team); break;
+
+    // Labels
+    case "labels":        await cmdLabels(p0 || flags.team); break;
+    case "label-create":  await cmdLabelCreate(p0, flags); break;
+
+    // Documents
+    case "docs":          await cmdDocs(flags); break;
+    case "doc":           await cmdDoc(p0); break;
+    case "doc-create":    await cmdDocCreate(p0, flags); break;
+
+    // Attachments
+    case "attachments":   await cmdAttachments(p0); break;
+    case "attach":        await cmdAttach(p0, p1, p2, flags); break;
+
+    // Teams & projects
+    case "teams":         await cmdTeams(); break;
+    case "projects":      await cmdProjects(p0 || flags.team); break;
+    case "standup":       await cmdStandup(); break;
+
     default:
       console.log(`Linear CLI — @linear/sdk
 
-Commands:
+Issues:
   my-issues                        Your open assigned issues
   team [TEAM_KEY]                  All open issues for a team (default: ${DEFAULT_TEAM})
-  teams                            List all teams
-  issue <TEAM-123>                 Issue details + comments
-  create <title> [desc] [--team]   Create issue
-  update <TEAM-123> [--title] [--description] [--priority] [--status] [--assignee]
+  issue <TEAM-123>                 Issue details + relations + attachments + comments
+  create <title> [desc] [--team] [--priority] [--status] [--assignee] [--label] [--due]
+  update <TEAM-123> [--title] [--description] [--priority] [--status] [--assignee] [--label] [--due]
   comment <TEAM-123> <text>        Add comment
   status <TEAM-123> <state>        Update status (todo|progress|review|done|blocked|backlog)
   priority <TEAM-123> <level>      Set priority (urgent|high|medium|low|none)
   assign <TEAM-123> <user>         Assign to user
   search <query>                   Search issues
+  archive <TEAM-123>               Archive issue
+  unarchive <TEAM-123>             Unarchive issue
+  delete <TEAM-123>                Delete issue (permanent)
+  relate <ISS-1> <ISS-2> <type>   Relate issues (blocks|relates-to|duplicates)
+  batch-create <json> [--team]     Create multiple issues from JSON array or file
+
+Cycles:
+  cycles [TEAM_KEY]                List cycles for a team
+  cycle-current [TEAM_KEY]         Show current active cycle with issues
+
+Labels:
+  labels [TEAM_KEY]                List labels (team-scoped or workspace)
+  label-create <name> [--color HEX] [--description TEXT] [--team KEY]
+
+Documents:
+  docs                             List documents
+  doc <DOC_ID>                     View document
+  doc-create <title> [--content MD] [--project PROJECT_ID]
+
+Attachments:
+  attachments <TEAM-123>           List attachments on an issue
+  attach <TEAM-123> <title> <url> [--subtitle TEXT]
+
+Teams & Projects:
+  teams                            List all teams
   projects [TEAM_KEY]              List projects with progress
   standup                          Daily standup summary`);
   }
