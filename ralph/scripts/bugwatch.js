@@ -37,20 +37,19 @@ async function getChecksStatus() {
   const { stdout } = await run(
     `gh pr checks --json name,state,bucket`
   );
-  if (!stdout) return { allDone: false, bugbotFound: false, anyRunning: true };
+  if (!stdout) return { allDone: false, anyChecks: false, anyRunning: true };
   try {
     const checks = JSON.parse(stdout);
-    const bugbot = checks.find((c) => c.name === BUGBOT_CHECK_NAME);
     const anyRunning = checks.some(
       (c) => c.state === "PENDING" || c.state === "IN_PROGRESS" || c.bucket === "pending"
     );
     return {
       allDone: !anyRunning,
-      bugbotFound: !!bugbot,
+      anyChecks: checks.length > 0,
       anyRunning,
     };
   } catch {
-    return { allDone: false, bugbotFound: false, anyRunning: true };
+    return { allDone: false, anyChecks: false, anyRunning: true };
   }
 }
 
@@ -213,9 +212,9 @@ async function waitForCheck(expectedSha) {
     }
 
     const status = await getChecksStatus();
-    if (!status.bugbotFound) {
-      sawPending = true; // checks haven't appeared yet — new run hasn't started
-      console.log(`  ⏳ Bug Bot check not found yet (${s}/${maxPolls})…`);
+    if (!status.anyChecks) {
+      sawPending = true; // no checks yet — new run hasn't started
+      console.log(`  ⏳ No checks found yet (${s}/${maxPolls})…`);
     } else if (status.anyRunning) {
       sawPending = true; // checks are still running
       console.log(`  ⏳ Checks still running (${s}/${maxPolls})…`);
@@ -241,7 +240,7 @@ while (iteration < MAX_ITERATIONS) {
   // 1. Wait for Bug Bot to appear and finish (on the expected commit)
   const check = await waitForCheck(expectedSha);
   if (!check) {
-    console.error("❌ Timed out waiting for Bug Bot — is it configured for this repo?");
+    console.error("❌ Timed out waiting for checks to complete");
     process.exit(1);
   }
 
