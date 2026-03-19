@@ -135,7 +135,10 @@ firecrawl search "restaurants" --location "Berlin,Germany" --country DE
 firecrawl search "documentation" --scrape --scrape-formats markdown
 
 # Save to file
-firecrawl search "firecrawl" --pretty -o results.json
+firecrawl search "firecrawl" -o results.txt
+
+# JSON output for piping/filtering
+firecrawl search "firecrawl" --json | jq .
 ```
 
 **Search Options:**
@@ -152,7 +155,7 @@ firecrawl search "firecrawl" --pretty -o results.json
 | `--scrape-formats <formats>` | Formats for scraped content (default: markdown) |
 | `--only-main-content` | Main content only when scraping (default: true) |
 | `--output <path>` | Save to file |
-| `--pretty` | Pretty print JSON |
+| `--json` | Output as compact JSON |
 
 ### Map
 
@@ -362,4 +365,4 @@ firecrawl version
 - Use `--only-main-content` on scrape for cleaner output
 - Single format outputs raw content; multiple formats output JSON
 - Output goes to stdout — pipe to `jq`, `head`, or redirect to files
-- Use `--pretty` for human-readable JSON
+- Use `--pretty` for human-readable JSON only on commands that support it (for example `map`, `crawl`, and `credit-usage`); for `search`, use `--json | jq .`
