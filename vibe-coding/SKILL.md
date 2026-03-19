@@ -9,12 +9,12 @@ Use the shared `doma` CLI instead of repo-specific scripts.
 
 ## Workflow
 
-1. Run `doma setup` inside the repo.
-2. Define repo preview defaults with `doma repo init --preview-cmd ... --preview-port ...`.
-3. Create a task worktree with `doma worktree create <branch> --author-name ... --author-email ...`.
+1. Run `vibe setup` inside the repo.
+2. Define repo preview defaults with `vibe repo init --preview-cmd ... --preview-port ...`.
+3. Create a task worktree with `vibe worktree create <branch> --author-name ... --author-email ...`.
 4. Work inside the worktree.
-5. Commit with `doma commit ...`, never plain `git commit`.
-6. Launch previews with `doma preview start`.
+5. Commit with `vibe commit ...`, never plain `git commit`.
+6. Launch previews with `vibe preview start`.
 
 ## Contract
 

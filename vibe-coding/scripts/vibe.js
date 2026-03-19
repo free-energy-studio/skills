@@ -15,12 +15,12 @@ function note(message) {
 
 function usage() {
   console.log(`Usage:
-  doma setup
-  doma repo init --preview-cmd <command> --preview-port <port> [--preview-base-domain ondomain.dev]
-  doma worktree create <name> --author-name <name> --author-email <email> [--base main]
-  doma commit [git-commit-args...]
-  doma preview start [--port <port>] [--cmd <command>] [--base-domain <domain>]
-  doma hook pre-commit`);
+  vibe setup
+  vibe repo init --preview-cmd <command> --preview-port <port> [--preview-base-domain ondomain.dev]
+  vibe worktree create <name> --author-name <name> --author-email <email> [--base main]
+  vibe commit [git-commit-args...]
+  vibe preview start [--port <port>] [--cmd <command>] [--base-domain <domain>]
+  vibe hook pre-commit`);
 }
 
 function run(bin, args, options = {}) {
@@ -165,7 +165,7 @@ function ensureHooksWrapper(cwd = process.cwd()) {
   const hooksDir = path.join(root, '.githooks');
   fs.mkdirSync(hooksDir, { recursive: true });
   const hookPath = path.join(hooksDir, 'pre-commit');
-  const wrapper = '#!/usr/bin/env bash\nset -euo pipefail\nexec doma hook pre-commit\n';
+  const wrapper = '#!/usr/bin/env bash\nset -euo pipefail\nexec vibe hook pre-commit\n';
   fs.writeFileSync(hookPath, wrapper);
   fs.chmodSync(hookPath, 0o755);
 }
@@ -229,7 +229,7 @@ function cmdSetup() {
   console.log(`  worktrees: ${gitGet('doma.worktreesRoot')}/${repoName()}`);
   console.log(`  preview base domain: ${gitGet('doma.previewBaseDomain')}`);
   console.log(`  hooksPath: ${gitGet('core.hooksPath')}`);
-  console.log('\nNext: doma repo init --preview-cmd "..." --preview-port 3000');
+  console.log('\nNext: vibe repo init --preview-cmd "..." --preview-port 3000');
 }
 
 function cmdRepoInit(argv) {
@@ -301,11 +301,11 @@ function cmdWorktreeCreate(argv) {
 function cmdCommit(argv) {
   requireGitRepo();
   ensureRepoDefaults();
-  if (argv.length === 0) die("Pass normal git commit args, for example: doma commit -m 'feat: ...'");
+  if (argv.length === 0) die("Pass normal git commit args, for example: vibe commit -m 'feat: ...'");
 
   const authorName = currentAuthorName();
   const authorEmail = currentAuthorEmail();
-  if (!authorName || !authorEmail) die('No worktree author configured. Create the worktree with doma worktree create ...');
+  if (!authorName || !authorEmail) die('No worktree author configured. Create the worktree with vibe worktree create ...');
 
   const env = {
     ...process.env,

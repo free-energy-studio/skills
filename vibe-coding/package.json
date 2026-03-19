@@ -3,6 +3,6 @@
   "version": "0.1.0",
   "type": "module",
   "bin": {
-    "doma": "./scripts/doma.js"
+    "vibe": "./scripts/vibe.js"
   }
 }
