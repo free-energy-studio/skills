@@ -286,6 +286,7 @@ function cmdWorktreeCreate(argv) {
     git(['worktree', 'add', '-b', name, target, base]);
   }
 
+  ensureHooksWrapper(target);
   gitSetWorktree('doma.worktreeName', name, target);
   gitSetWorktree('doma.authorName', authorName, target);
   gitSetWorktree('doma.authorEmail', authorEmail, target);
