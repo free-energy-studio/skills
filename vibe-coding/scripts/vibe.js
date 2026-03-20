@@ -15,7 +15,7 @@ function note(message) {
 
 function usage() {
   console.log(`Usage:
-  vibe setup
+  vibe setup --committer-name <name> --committer-email <email> [--worktrees-root <path>] [--preview-base-domain ondomain.dev]
   vibe repo init --preview-cmd <command> --preview-port <port> [--preview-base-domain ondomain.dev]
   vibe worktree create <name> --author-name <name> --author-email <email> [--base main]
   vibe commit [git-commit-args...]
@@ -97,11 +97,16 @@ function slugify(value) {
     .replace(/-+/g, '-');
 }
 
+function requireCommitterConfig(cwd = process.cwd()) {
+  const name = gitGet('vibe.committerName', cwd);
+  const email = gitGet('vibe.committerEmail', cwd);
+  if (!name || !email) die('Committer not configured. Run: vibe setup --committer-name "..." --committer-email "..."');
+  return { name, email };
+}
+
 function ensureRepoDefaults(cwd = process.cwd()) {
-  if (!gitGet('doma.committerName', cwd)) gitSet('doma.committerName', 'Dr. Doma', cwd);
-  if (!gitGet('doma.committerEmail', cwd)) gitSet('doma.committerEmail', 'doma@ondomain.ai', cwd);
-  if (!gitGet('doma.worktreesRoot', cwd)) gitSet('doma.worktreesRoot', '/root/projects/.worktrees', cwd);
-  if (!gitGet('doma.previewBaseDomain', cwd)) gitSet('doma.previewBaseDomain', 'ondomain.dev', cwd);
+  if (!gitGet('vibe.worktreesRoot', cwd)) gitSet('vibe.worktreesRoot', '/root/projects/.worktrees', cwd);
+  if (!gitGet('vibe.previewBaseDomain', cwd)) gitSet('vibe.previewBaseDomain', 'ondomain.dev', cwd);
 }
 
 function currentBranch(cwd = process.cwd()) {
@@ -109,19 +114,19 @@ function currentBranch(cwd = process.cwd()) {
 }
 
 function currentWorktreeName(cwd = process.cwd()) {
-  return gitGetWorktree('doma.worktreeName', cwd) || currentBranch(cwd);
+  return gitGetWorktree('vibe.worktreeName', cwd) || currentBranch(cwd);
 }
 
 function currentPreviewSlug(cwd = process.cwd()) {
-  return gitGetWorktree('doma.previewSlug', cwd) || slugify(currentWorktreeName(cwd));
+  return gitGetWorktree('vibe.previewSlug', cwd) || slugify(currentWorktreeName(cwd));
 }
 
 function currentAuthorName(cwd = process.cwd()) {
-  return gitGetWorktree('doma.authorName', cwd);
+  return gitGetWorktree('vibe.authorName', cwd);
 }
 
 function currentAuthorEmail(cwd = process.cwd()) {
-  return gitGetWorktree('doma.authorEmail', cwd);
+  return gitGetWorktree('vibe.authorEmail', cwd);
 }
 
 function parseArgs(argv) {
@@ -216,18 +221,30 @@ function gitIdent(kind, envVar, cwd = process.cwd()) {
   return parseGitIdent(git(['var', kind], { cwd }).stdout.trim());
 }
 
-function cmdSetup() {
+function cmdSetup(argv) {
   requireGitRepo();
+  const { flags } = parseArgs(argv);
+
+  const committerName = String(flags['committer-name'] || gitGet('vibe.committerName') || '').trim();
+  const committerEmail = String(flags['committer-email'] || gitGet('vibe.committerEmail') || '').trim();
+  if (!committerName) die('Missing --committer-name.');
+  if (!committerEmail) die('Missing --committer-email.');
+
   gitSet('extensions.worktreeConfig', 'true');
   gitSet('core.hooksPath', '.githooks');
+  gitSet('vibe.committerName', committerName);
+  gitSet('vibe.committerEmail', committerEmail);
+
+  if (flags['worktrees-root']) gitSet('vibe.worktreesRoot', String(flags['worktrees-root']).trim());
+  if (flags['preview-base-domain']) gitSet('vibe.previewBaseDomain', String(flags['preview-base-domain']).trim());
   ensureRepoDefaults();
   ensureHooksWrapper();
 
   note('Repo configured for cross-repo vibe coding');
   console.log(`  repo: ${repoName()}`);
-  console.log(`  committer: ${gitGet('doma.committerName')} <${gitGet('doma.committerEmail')}>`);
-  console.log(`  worktrees: ${gitGet('doma.worktreesRoot')}/${repoName()}`);
-  console.log(`  preview base domain: ${gitGet('doma.previewBaseDomain')}`);
+  console.log(`  committer: ${committerName} <${committerEmail}>`);
+  console.log(`  worktrees: ${gitGet('vibe.worktreesRoot')}/${repoName()}`);
+  console.log(`  preview base domain: ${gitGet('vibe.previewBaseDomain')}`);
   console.log(`  hooksPath: ${gitGet('core.hooksPath')}`);
   console.log('\nNext: vibe repo init --preview-cmd "..." --preview-port 3000');
 }
@@ -237,7 +254,7 @@ function cmdRepoInit(argv) {
   const { flags } = parseArgs(argv);
   const previewCmd = String(flags['preview-cmd'] || '').trim();
   const previewPort = Number(flags['preview-port'] || 0);
-  const previewBaseDomain = String(flags['preview-base-domain'] || gitGet('doma.previewBaseDomain') || 'ondomain.dev').trim();
+  const previewBaseDomain = String(flags['preview-base-domain'] || gitGet('vibe.previewBaseDomain') || 'ondomain.dev').trim();
 
   if (!previewCmd) die('Missing --preview-cmd.');
   if (!Number.isFinite(previewPort) || previewPort <= 0) die('Missing or invalid --preview-port.');
@@ -273,7 +290,7 @@ function cmdWorktreeCreate(argv) {
   const slug = slugify(name);
   if (!slug) die(`Could not derive a slug from '${name}'.`);
 
-  const worktreesRoot = gitGet('doma.worktreesRoot') || '/root/projects/.worktrees';
+  const worktreesRoot = gitGet('vibe.worktreesRoot') || '/root/projects/.worktrees';
   const target = path.join(worktreesRoot, repoName(), slug);
   if (fs.existsSync(target)) die(`Worktree path already exists: ${target}`);
 
@@ -287,10 +304,10 @@ function cmdWorktreeCreate(argv) {
   }
 
   ensureHooksWrapper(target);
-  gitSetWorktree('doma.worktreeName', name, target);
-  gitSetWorktree('doma.authorName', authorName, target);
-  gitSetWorktree('doma.authorEmail', authorEmail, target);
-  gitSetWorktree('doma.previewSlug', slug, target);
+  gitSetWorktree('vibe.worktreeName', name, target);
+  gitSetWorktree('vibe.authorName', authorName, target);
+  gitSetWorktree('vibe.authorEmail', authorEmail, target);
+  gitSetWorktree('vibe.previewSlug', slug, target);
 
   note('Created worktree');
   console.log(`  branch: ${name}`);
@@ -301,7 +318,7 @@ function cmdWorktreeCreate(argv) {
 
 function cmdCommit(argv) {
   requireGitRepo();
-  ensureRepoDefaults();
+  const committer = requireCommitterConfig();
   if (argv.length === 0) die("Pass normal git commit args, for example: vibe commit -m 'feat: ...'");
 
   const authorName = currentAuthorName();
@@ -310,8 +327,8 @@ function cmdCommit(argv) {
 
   const env = {
     ...process.env,
-    GIT_COMMITTER_NAME: gitGet('doma.committerName') || 'Dr. Doma',
-    GIT_COMMITTER_EMAIL: gitGet('doma.committerEmail') || 'doma@ondomain.ai',
+    GIT_COMMITTER_NAME: committer.name,
+    GIT_COMMITTER_EMAIL: committer.email,
     GIT_AUTHOR_NAME: authorName,
     GIT_AUTHOR_EMAIL: authorEmail,
   };
@@ -330,22 +347,22 @@ function cmdPreviewStart(argv) {
   const { flags } = parseArgs(argv);
   const manifest = loadManifest();
   const root = repoRoot();
-  const domaDir = path.join(root, '.doma');
-  fs.mkdirSync(domaDir, { recursive: true });
+  const vibeDir = path.join(root, '.vibe');
+  fs.mkdirSync(vibeDir, { recursive: true });
 
   const port = Number(flags.port || manifest.preview?.port || 0);
   const command = String(flags.cmd || manifest.preview?.command || '').trim();
-  const baseDomain = String(flags['base-domain'] || manifest.preview?.baseDomain || gitGet('doma.previewBaseDomain') || 'ondomain.dev').trim();
+  const baseDomain = String(flags['base-domain'] || manifest.preview?.baseDomain || gitGet('vibe.previewBaseDomain') || 'ondomain.dev').trim();
   const slug = currentPreviewSlug();
   const domain = `${slug}.${baseDomain}`;
 
   if (!Number.isFinite(port) || port <= 0) die('Missing preview port. Provide --port or define preview.port in .vibe.json.');
   if (!command) die('Missing preview command. Provide --cmd or define preview.command in .vibe.json.');
 
-  const appLog = path.join(domaDir, 'preview-app.log');
-  const appPid = path.join(domaDir, 'preview-app.pid');
-  const ngrokLog = path.join(domaDir, 'ngrok.log');
-  const ngrokPid = path.join(domaDir, 'ngrok.pid');
+  const appLog = path.join(vibeDir, 'preview-app.log');
+  const appPid = path.join(vibeDir, 'preview-app.pid');
+  const ngrokLog = path.join(vibeDir, 'ngrok.log');
+  const ngrokPid = path.join(vibeDir, 'ngrok.pid');
 
   const appProcess = startBackground(command, root, appLog, appPid);
   ensureNgrokAvailable();
@@ -365,16 +382,15 @@ function cmdPreviewStart(argv) {
 
 function cmdHookPreCommit() {
   requireGitRepo();
-  const expectedCommitterName = gitGet('doma.committerName') || 'Dr. Doma';
-  const expectedCommitterEmail = gitGet('doma.committerEmail') || 'doma@ondomain.ai';
+  const expected = requireCommitterConfig();
   const expectedAuthorName = currentAuthorName();
   const expectedAuthorEmail = currentAuthorEmail();
 
   const committer = gitIdent('GIT_COMMITTER_IDENT', 'GIT_COMMITTER_IDENT');
   const author = gitIdent('GIT_AUTHOR_IDENT', 'GIT_AUTHOR_IDENT');
 
-  if (committer.name !== expectedCommitterName || committer.email !== expectedCommitterEmail) {
-    die(`pre-commit: committer must be ${expectedCommitterName} <${expectedCommitterEmail}>, got ${committer.name} <${committer.email}>`);
+  if (committer.name !== expected.name || committer.email !== expected.email) {
+    die(`pre-commit: committer must be ${expected.name} <${expected.email}>, got ${committer.name} <${committer.email}>`);
   }
 
   if (expectedAuthorName && author.name !== expectedAuthorName) {
@@ -385,8 +401,8 @@ function cmdHookPreCommit() {
     die(`pre-commit: author email must match worktree config: expected '${expectedAuthorEmail}', got '${author.email}'`);
   }
 
-  if (expectedAuthorName && expectedAuthorEmail && author.name === expectedCommitterName && author.email === expectedCommitterEmail) {
-    die('pre-commit: author cannot be the Dr. Doma committer identity');
+  if (expectedAuthorName && expectedAuthorEmail && author.name === expected.name && author.email === expected.email) {
+    die('pre-commit: author (human) cannot be the same as the committer (bot)');
   }
 }
 
@@ -398,7 +414,7 @@ function main() {
     return;
   }
 
-  if (command === 'setup') return cmdSetup();
+  if (command === 'setup') return cmdSetup([subcommand, ...rest].filter(Boolean));
   if (command === 'repo' && subcommand === 'init') return cmdRepoInit(rest);
   if (command === 'worktree' && subcommand === 'create') return cmdWorktreeCreate(rest);
   if (command === 'commit') return cmdCommit([subcommand, ...rest].filter(Boolean));
