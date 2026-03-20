@@ -13,8 +13,8 @@ Generate atomic user stories from Linear tickets or descriptions, then execute t
 bun ralph 25          # run the agent loop (25 iterations max)
 ```
 
-### `/dev-workflow` — Development Orchestration
-End-to-end flow: Ticket → PRD → Ralph → Bug Bot loop → QA handoff.
+### `/twilio` — Twilio CLI Operations
+Authenticate with Twilio, manage profiles, send messages, place calls, and inspect phone numbers or messaging services from the terminal.
 
 ## Setup
 
