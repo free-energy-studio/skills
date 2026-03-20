@@ -57,8 +57,4 @@ ralph/              # PRD skill + agent loop
   package.json      # npm package for `bun ralph` CLI
   scripts/
     ralph.js        # Autonomous agent loop
-dev-workflow/       # Orchestration workflow
-  SKILL.md
-  references/
-    prd-format.md
 ```

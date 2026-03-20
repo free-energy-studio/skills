@@ -4,8 +4,8 @@
   "workspaces": [
     "ralph",
     "linear",
-    "dev-workflow",
-    "firecrawl"
+    "firecrawl",
+    "vibe-coding"
   ],
   "version": "0.0.17"
 }
