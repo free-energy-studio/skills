@@ -1,12 +1,9 @@
 {
   "lockfileVersion": 1,
+  "configVersion": 0,
   "workspaces": {
     "": {
       "name": "free-energy-skills",
-    },
-    "dev-workflow": {
-      "name": "dev-workflow",
-      "version": "1.0.0",
     },
     "firecrawl": {
       "name": "firecrawl",
@@ -27,9 +24,21 @@
     },
     "ralph": {
       "name": "ralph",
-      "version": "1.2.2",
+      "version": "1.3.0",
       "bin": {
         "ralph": "./scripts/ralph.js",
+        "bugwatch": "./scripts/bugwatch.js",
+      },
+    },
+    "twilio": {
+      "name": "twilio",
+      "version": "1.0.0",
+    },
+    "vibe-coding": {
+      "name": "vibe-coding",
+      "version": "0.1.0",
+      "bin": {
+        "vibe": "./scripts/vibe.js",
       },
     },
   },
@@ -44,8 +53,6 @@
 
     "bun-types": ["bun-types@1.3.10", "", { "dependencies": { "@types/node": "*" } }, "sha512-tcpfCCl6XWo6nCVnpcVrxQ+9AYN1iqMIzgrSKYMB/fjLtV2eyAVEg7AxQJuCq/26R6HpKWykQXuSOq/21RYcbg=="],
 
-    "dev-workflow": ["dev-workflow@workspace:dev-workflow"],
-
     "firecrawl": ["firecrawl@workspace:firecrawl"],
 
     "graphql": ["graphql@16.13.1", "", {}, "sha512-gGgrVCoDKlIZ8fIqXBBb0pPKqDgki0Z/FSKNiQzSGj2uEYHr1tq5wmBegGwJx6QB5S5cM0khSBpi/JFHMCvsmQ=="],
@@ -54,8 +61,12 @@
 
     "ralph": ["ralph@workspace:ralph"],
 
+    "twilio": ["twilio@workspace:twilio"],
+
     "typescript": ["typescript@5.9.3", "", { "bin": { "tsc": "bin/tsc", "tsserver": "bin/tsserver" } }, "sha512-jl1vZzPDinLr9eUt3J/t7V6FgNEw9QjvBPdysz9KfQDD41fQrC2Y4vKQdiaUpFT4bXlb1RHhLpp8wtm6M5TgSw=="],
 
     "undici-types": ["undici-types@7.18.2", "", {}, "sha512-AsuCzffGHJybSaRrmr5eHr81mwJU3kjw6M+uprWvCXiNeN9SOGwQ3Jn8jb8m3Z6izVgknn1R0FTCEAP2QrLY/w=="],
+
+    "vibe-coding": ["vibe-coding@workspace:vibe-coding"],
   }
 }
