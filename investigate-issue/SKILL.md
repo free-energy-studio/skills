@@ -141,11 +141,26 @@ Every fix operates within constraints the original code was respecting:
 
 The right fix satisfies the new requirement without violating existing constraints. If a constraint must be violated, make that explicit in the ticket.
 
-#### Create or relate tickets
+#### Investigation tickets are never duplicates
 
-- **Search the issue tracker** for existing tickets that address this root cause
-- If one exists: relate the investigation ticket to it, add a comment with your findings
-- If not: create a new ticket (bug or feature label) with:
+Every investigation is its own event. Even if the root cause turns out to be the same as a prior investigation, **always create a new investigation ticket.** Two investigations that land on the same root cause are not duplicates — they represent separate incidents, with separate evidence, timelines, and scope. The investigation record is the audit trail of what happened and when. Do not merge, close-as-dup, or skip creating an investigation ticket because a prior one exists for the same root cause.
+
+#### Fix/feature tickets ARE deduplicated
+
+The opposite rule applies to fix and feature tickets. Multiple investigations may point to the same underlying fix. **Do not create duplicate fix tickets.** Search thoroughly first.
+
+Run **at least 3 searches** with different term strategies before concluding no fix ticket exists:
+
+1. **Root cause terms from your diagnosis** — the actual code identifiers, function names, filter names, technical mechanisms you found. If you diagnosed an `upToTs` filter bug, search for "upToTs", not "duplicate messages."
+2. **Related incident references from the conversation** — if anyone mentioned a prior event, date, or incident, search for tickets filed from that event.
+3. **Component or module names** touched by the root cause — the file, the service, the subsystem.
+
+**Do NOT rely solely on the reporter's symptom language.** The reporter describes what they saw. The issue tracker contains what engineers wrote about the cause. These use different vocabularies. Always translate symptoms into technical terms before searching.
+
+**Quality gate:** If all your searches return nothing, review your search terms. Are you searching with words from the bug report, or words from your diagnosis? If the former, you haven't actually searched yet.
+
+- If a matching fix ticket exists: **relate your new investigation ticket to it**, add a comment with your new findings and evidence
+- If not (after thorough search): create a new fix ticket (bug or feature label) with:
   - Clear description of what to change and why
   - Technical approach (specific files, functions, and logic changes)
   - What the fix must NOT break (reference the original constraint)
@@ -168,11 +183,14 @@ Don't create tickets for unconfirmed issues. The validation step exists to preve
 ### Separate problem from solution
 The investigation ticket describes the problem. The fix ticket describes the solution. Keep them distinct. This prevents scope creep and makes it possible to relate multiple investigations to the same fix.
 
+### Investigations are events, fixes are actions
+Every investigation gets its own ticket — even if it lands on the same root cause as a prior one. Investigation tickets are an audit trail of incidents; they should never be deduplicated. Fix tickets are the opposite: one fix per root cause, with all related investigations linked to it.
+
 ### Follow the data
 Every claim in the investigation should be backed by evidence — a query result, a log entry, a code path. "The model probably did X" is not a diagnosis. "The model received messages A, B, C because filter Y stripped message D" is.
 
-### Check for prior art
-Before creating fix tickets, search the issue tracker. Many bugs are symptoms of known issues, regressions from prior fixes, or duplicates. Relating investigations to existing tickets is more valuable than creating duplicates.
+### Check for prior art (search with root cause terms, not symptom terms)
+Before creating fix tickets, search the issue tracker using the technical vocabulary from your diagnosis — not the reporter's description of the symptom. If someone in the conversation referenced a prior incident, search for tickets filed from that incident. Many bugs are symptoms of known issues, regressions from prior fixes, or duplicates. Relating investigations to existing fix tickets is more valuable than creating duplicate fix tickets.
 
 ### Question your assumptions
 The most common investigation failure is anchoring on the first plausible theory. When someone pushes back on your diagnosis, treat it as signal — re-examine the evidence. The fix for the last bug may be the cause of this one.
