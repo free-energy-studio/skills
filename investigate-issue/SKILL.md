@@ -150,7 +150,8 @@ The right fix satisfies the new requirement without violating existing constrain
   - Technical approach (specific files, functions, and logic changes)
   - What the fix must NOT break (reference the original constraint)
   - Acceptance criteria
-  - Relation to the investigation ticket
+
+**Link the tickets in the issue tracker.** Creating a relation in the ticket description is not enough — create the actual relation so the tracker shows the dependency. Example: `linear issue relation add FIX-TICKET blocked-by INVESTIGATION-TICKET`. Do not skip this step.
 
 ### 6. Report
 
