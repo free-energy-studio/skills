@@ -1,6 +1,12 @@
 ---
 name: investigate-issue
-description: Deep-dive diagnostic investigation of bug reports. Use when someone reports a bug, unexpected behavior, or something broken. Drives a structured investigation: validate the issue, document it in a ticket, diagnose root cause through database/code/history analysis, determine the fix, and report back. Triggers on bug reports, "something is broken", "this happened twice", screenshots of unexpected behavior, "investigate this", "look into this issue".
+description: >
+  Deep-dive diagnostic investigation of bug reports. Use when someone reports
+  a bug, unexpected behavior, or something broken. Drives a structured
+  investigation - validate the issue, document it in a ticket, diagnose root
+  cause through database/code/history analysis, determine the fix, and report
+  back. Triggers on bug reports, something is broken, this happened twice,
+  screenshots of unexpected behavior, investigate this, look into this issue.
 ---
 
 # Investigate Issue
