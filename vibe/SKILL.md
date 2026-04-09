@@ -10,8 +10,9 @@ description: >
   or work in the openclaw workspace (never spawn agents here).
 metadata:
   openclaw:
-    emoji: "🔨"
+    emoji: "⚡"
     os: ["linux"]
+    always: true
     requires:
       bins: ["claude", "tmux", "gh", "op"]
     install:
