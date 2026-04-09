@@ -21,16 +21,6 @@ metadata:
         package: "@anthropic-ai/claude-code"
         bins: ["claude"]
         label: "Install Claude Code CLI (npm)"
-      - id: brew-tmux
-        kind: brew
-        formula: tmux
-        bins: ["tmux"]
-        label: "Install tmux (brew)"
-      - id: brew-gh
-        kind: brew
-        formula: gh
-        bins: ["gh"]
-        label: "Install GitHub CLI (brew)"
 ---
 
 # Vibe — Claude Code Workspaces
