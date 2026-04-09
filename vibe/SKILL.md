@@ -187,7 +187,7 @@ sudo -u vibe-<name> -H bash -lc "cd $BARE_DIR && git fetch origin"
 ### Create worktree:
 
 ```bash
-BRANCH="<user>/<feature-name>"  # working branch
+BRANCH="<user>/<feature-name>"  # working branch (see naming below)
 BASE="main"                     # branch to fork from
 
 sudo -u vibe-<name> -H bash -lc "
@@ -234,6 +234,10 @@ sudo -u vibe-<name> -H bash -lc "
   fi
 "
 ```
+
+### Branch naming:
+
+When the task is tied to a Linear ticket, use the Linear git branch name (e.g. `sam/doma-123-fix-auth-token`). You can get it from Linear's UI or via the API. This keeps branches traceable to tickets.
 
 ## Step 5: Run Claude Code
 
