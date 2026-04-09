@@ -161,9 +161,11 @@ This is a **one-time setup** per user per repo. The canonical env file is reused
 Generate a unique 3-word slug for the workspace:
 
 ```bash
-SLUG="$(shuf -n1 -e calm bold cool dark deep fair fast firm fond free fresh glad good keen kind lean live long mild neat nice open pale pure rare raw rich ripe safe slim soft sure tall thin trim true warm wide wise)-$(shuf -n1 -e ash bay bog cay dam den dew elm fen fig fir fog fox fur gap gem glen hay ice ivy jam jay jet keg lake lark loom marsh mist moss oak orb ore peak pine plum pond quay raft reed reef ridge rim rock rye sage salt sand sea shell shore silk sky snow soot star stem sun surf tide vale vine wave well yew)-$(shuf -n1 -e ant ape bass bear bee bird boar buck bull carp cat clam cod colt crab crane crow cub dart deer doe dove duck eagle eel elk ewe fawn fish flea foal fox frog gull hare hawk hen hog ibis jay kit kite lamb lark lynx mare mink mole moth mule newt osprey otter owl ox perch pike quail ram rook seal shad shrew slug snail snipe sole stag stork swan tern toad trout vole wasp wren yak)"
+SLUG=$(bash {baseDir}/scripts/slug.sh)
 echo "$SLUG"
 ```
+
+The script generates `adj-noun-noun` slugs with ~2.1M permutations (100 adjectives × 145 nouns × 145 nouns).
 
 Check it's not already in use:
 
