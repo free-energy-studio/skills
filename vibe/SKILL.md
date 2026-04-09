@@ -8,6 +8,28 @@ description: >
   "run claude code on", or any request to delegate coding work.
   NOT for: simple one-liner edits (use edit tool), reading code (use read tool),
   or work in the openclaw workspace (never spawn agents here).
+metadata:
+  openclaw:
+    emoji: "🔨"
+    os: ["linux"]
+    requires:
+      bins: ["claude", "tmux", "gh", "op"]
+    install:
+      - id: node-claude
+        kind: node
+        package: "@anthropic-ai/claude-code"
+        bins: ["claude"]
+        label: "Install Claude Code CLI (npm)"
+      - id: brew-tmux
+        kind: brew
+        formula: tmux
+        bins: ["tmux"]
+        label: "Install tmux (brew)"
+      - id: brew-gh
+        kind: brew
+        formula: gh
+        bins: ["gh"]
+        label: "Install GitHub CLI (brew)"
 ---
 
 # Vibe — Claude Code Workspaces
@@ -19,7 +41,7 @@ Dispatch coding tasks to Claude Code running as isolated Unix users with git wor
 - **User**: `vibe-<name>` — Linux account with its own creds and file ownership
 - **Workspace**: git worktree at `~/workspaces/<slug>/`, identified by a 3-word slug
 - **Auth**: `CLAUDE_CODE_OAUTH_TOKEN`, `GH_TOKEN`, `LINEAR_API_KEY` in `~/.profile`
-- **1Password**: each user has a `<name>.vibe` item in the `ichabod-doma` vault
+- **1Password**: each user has a `<name>.vibe` item with their credentials
 - **Bare repos**: `~/repos/<org>--<repo>.git` — per-user fetch targets
 - **Env files**: `~/envs/<org>--<repo>.env` — canonical secrets, copied into each worktree
 - **Modes**: one-shot (`--print`) or interactive (tmux) — agent decides
@@ -40,16 +62,7 @@ Default to **one-shot** unless there's a reason to monitor.
 
 ## Step 1: Resolve User
 
-Map the requester to a vibe user. The team:
-
-| Person | User | 1Password Item |
-|--------|------|----------------|
-| Sam | `vibe-sam` | `sam.vibe` |
-| Dan | `vibe-dan` | `dan.vibe` |
-| Matt | `vibe-chmiel` | `chmiel.vibe` |
-| Kelani | `vibe-kelani` | `kelani.vibe` |
-| Toby | `vibe-toby` | `toby.vibe` |
-| Nilesh | `vibe-nilesh` | `nilesh.vibe` |
+Map the requester to a `vibe-<name>` user. Maintain a user roster in your workspace docs (e.g. TEAM.md) mapping people to their vibe username and 1Password item name.
 
 If no user is specified, use the requester's identity. If ambiguous, ask.
 
@@ -65,38 +78,43 @@ id vibe-<name> >/dev/null 2>&1
 ### If user doesn't exist — create:
 
 ```bash
-# Create user with home dir
+# Create user with home dir, add to vibe group
 useradd -m -s /bin/bash -G vibe vibe-<name>
 
 # Pull creds from 1Password and write to profile
 OP_ITEM="<name>.vibe"
-VAULT="ichabod-doma"
+VAULT="<your-vault>"
 
 CLAUDE_TOKEN=$(op read "op://$VAULT/$OP_ITEM/CLAUDE_CODE_OAUTH_TOKEN")
-GH_TOKEN=$(op read "op://$VAULT/$OP_ITEM/GH_TOKEN")
+GH_TOKEN_VAL=$(op read "op://$VAULT/$OP_ITEM/GH_TOKEN")
 LINEAR_KEY=$(op read "op://$VAULT/$OP_ITEM/LINEAR_API_KEY")
 
-cat >> /home/vibe-<name>/.profile << 'VIBEEOF'
+# Write to profile (use heredoc with actual values, not variable refs)
+cat >> /home/vibe-<name>/.profile << EOF
 export CLAUDE_CODE_OAUTH_TOKEN='$CLAUDE_TOKEN'
-export GH_TOKEN='$GH_TOKEN'
+export GH_TOKEN='$GH_TOKEN_VAL'
 export LINEAR_API_KEY='$LINEAR_KEY'
-VIBEEOF
+EOF
 
 # Fix ownership
 chown vibe-<name>:vibe /home/vibe-<name>/.profile
+
+# Set git identity
+sudo -u vibe-<name> -H git config --global user.name "<Human Name>"
+sudo -u vibe-<name> -H git config --global user.email "<email>"
 ```
 
 ### Validate credentials:
 
 ```bash
-# Claude — check auth
+# Claude — check auth (cd to /tmp to avoid EACCES on root-owned dirs)
 sudo -u vibe-<name> -H bash -lc 'cd /tmp && claude auth status 2>&1'
 # Expect: {"loggedIn": true, ...}
 
 # GitHub — check auth
 sudo -u vibe-<name> -H bash -lc 'gh auth status 2>&1'
 
-# Linear — just check the var is set
+# Linear — check the var is set
 sudo -u vibe-<name> -H bash -lc 'test -n "$LINEAR_API_KEY" && echo "ok"'
 ```
 
@@ -117,7 +135,7 @@ sudo -u vibe-<name> -H bash -lc "
 
 ### Secrets:
 
-Repos may provide a script to pull secrets (e.g. `bun run secrets:pull`, `op run`, a Makefile target). Check the repo's `package.json`, README, or `.env.example` to determine how.
+Repos may provide a script to pull secrets (e.g. a `secrets:pull` script, `op run`, a Makefile target). Check the repo's `package.json`, README, or `.env.example` to determine how.
 
 To run repo scripts, create a temporary worktree:
 
@@ -142,7 +160,6 @@ This is a **one-time setup** per user per repo. The canonical env file is reused
 Generate a unique 3-word slug for the workspace:
 
 ```bash
-# Use shuf with curated word lists or generate randomly
 SLUG="$(shuf -n1 -e calm bold cool dark deep fair fast firm fond free fresh glad good keen kind lean live long mild neat nice open pale pure rare raw rich ripe safe slim soft sure tall thin trim true warm wide wise)-$(shuf -n1 -e ash bay bog cay dam den dew elm fen fig fir fog fox fur gap gem glen hay ice ivy jam jay jet keg lake lark loom marsh mist moss oak orb ore peak pine plum pond quay raft reed reef ridge rim rock rye sage salt sand sea shell shore silk sky snow soot star stem sun surf tide vale vine wave well yew)-$(shuf -n1 -e ant ape bass bear bee bird boar buck bull carp cat clam cod colt crab crane crow cub dart deer doe dove duck eagle eel elk ewe fawn fish flea foal fox frog gull hare hawk hen hog ibis jay kit kite lamb lark lynx mare mink mole moth mule newt osprey otter owl ox perch pike quail ram rook seal shad shrew slug snail snipe sole stag stork swan tern toad trout vole wasp wren yak)"
 echo "$SLUG"
 ```
@@ -158,13 +175,12 @@ ls /home/vibe-<name>/workspaces/$SLUG 2>/dev/null && echo "COLLISION" || echo "O
 ### Ensure bare repo exists:
 
 ```bash
-REPO="ondomain/ichabod-doma"  # or whatever repo
-BARE_DIR="/home/vibe-<name>/repos/ondomain--ichabod-doma.git"
+BARE_DIR="/home/vibe-<name>/repos/<org>--<repo>.git"
 
 if [ ! -d "$BARE_DIR" ]; then
   sudo -u vibe-<name> -H bash -lc "
     mkdir -p ~/repos
-    gh repo clone $REPO ~/repos/ondomain--ichabod-doma.git -- --bare
+    gh repo clone <org>/<repo> ~/repos/<org>--<repo>.git -- --bare
   "
 fi
 
@@ -175,8 +191,8 @@ sudo -u vibe-<name> -H bash -lc "cd $BARE_DIR && git fetch origin"
 ### Create worktree:
 
 ```bash
-BRANCH="sam/fix-auth-bug"  # the working branch
-BASE="main"                # branch to fork from
+BRANCH="<user>/<feature-name>"  # working branch
+BASE="main"                     # branch to fork from
 
 sudo -u vibe-<name> -H bash -lc "
   cd $BARE_DIR
@@ -241,7 +257,7 @@ For large tasks, use `exec` with `background: true` and monitor via `process`.
 Persistent tmux session. Agent monitors and steers.
 
 ```bash
-# Create tmux session (run as the vibe user)
+# Create tmux session as the vibe user
 sudo -u vibe-<name> -H tmux new-session -d -s "$SLUG" -c "/home/vibe-<name>/workspaces/$SLUG"
 
 # Launch Claude Code inside
@@ -269,7 +285,7 @@ sudo -u vibe-<name> -H tmux capture-pane -t "$SLUG" -p | tail -5 | grep -E "❯|
 
 ```bash
 # Send follow-up instruction
-sudo -u vibe-<name> -H tmux send-keys -t "$SLUG" -l -- 'Also fix the tests'
+sudo -u vibe-<name> -H tmux send-keys -t "$SLUG" -l -- 'Additional instructions here'
 sleep 0.1
 sudo -u vibe-<name> -H tmux send-keys -t "$SLUG" Enter
 
@@ -305,8 +321,6 @@ sudo -u vibe-<name> -H bash -lc "
 "
 ```
 
-**Important**: Sam opens PRs to `main` and approves merges. Never run `gh pr merge` on main without his explicit say-so.
-
 ## Step 7: Cleanup
 
 After the PR is merged or work is abandoned:
@@ -317,7 +331,7 @@ sudo -u vibe-<name> -H tmux kill-session -t "$SLUG" 2>/dev/null
 
 # Remove worktree
 sudo -u vibe-<name> -H bash -lc "
-  cd ~/repos/ondomain--ichabod-doma.git
+  cd ~/repos/<org>--<repo>.git
   git worktree remove ~/workspaces/$SLUG --force
 "
 ```
@@ -339,28 +353,15 @@ for u in /home/vibe-*/; do
 done
 ```
 
-## Git Identity
-
-Each user should have a `.gitconfig` with their identity. Set during provisioning if missing:
-
-```bash
-sudo -u vibe-<name> -H git config --global user.name "<Human Name>"
-sudo -u vibe-<name> -H git config --global user.email "<email>"
-```
-
 ## Troubleshooting
 
 **Claude Code EACCES on /root**: Always `cd` to the workspace or `/tmp` before running claude commands. Claude Code tries to resolve the cwd and fails if it's root-owned.
 
-**Auth expired**: Re-pull from 1Password:
-```bash
-NEW_TOKEN=$(op read "op://ichabod-doma/<name>.vibe/CLAUDE_CODE_OAUTH_TOKEN")
-sudo -u vibe-<name> -H bash -c "sed -i 's|CLAUDE_CODE_OAUTH_TOKEN=.*|CLAUDE_CODE_OAUTH_TOKEN='\"'$NEW_TOKEN'\"'|' ~/.profile"
-```
+**Auth expired**: Re-pull from 1Password and update the relevant line in `~/.profile`.
 
 **Worktree conflicts**: If branch already exists locally:
 ```bash
-sudo -u vibe-<name> -H bash -lc "cd ~/repos/ondomain--ichabod-doma.git && git branch -D <branch>"
+sudo -u vibe-<name> -H bash -lc "cd ~/repos/<org>--<repo>.git && git branch -D <branch>"
 ```
 
 **tmux session exists**: Kill and recreate:
