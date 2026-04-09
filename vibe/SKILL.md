@@ -367,17 +367,37 @@ sudo -u vibe-<name> -H bash -lc "
 
 ## Step 7: Cleanup
 
-After the PR is merged or work is abandoned:
+After the PR is merged or work is abandoned, tear down everything associated with the slug.
+
+### Kill tmux sessions:
 
 ```bash
-# Kill tmux session (interactive mode only)
+# Kill all sessions for this workspace (Claude Code + dev server)
 sudo -u vibe-<name> -H tmux kill-session -t "$SLUG" 2>/dev/null
+sudo -u vibe-<name> -H tmux kill-session -t "${SLUG}-dev" 2>/dev/null
+```
 
-# Remove worktree
+### Remove tunnel (if created):
+
+Remove the ingress rule for `<slug>.<tunnel-domain>` from the cloudflared config and restart:
+
+```bash
+# Edit the config to remove the slug's ingress rule
+# Then:
+systemctl restart cloudflared
+```
+
+### Remove workspace:
+
+```bash
+# Repo-backed: remove worktree
 sudo -u vibe-<name> -H bash -lc "
   cd ~/repos/<org>--<repo>.git
   git worktree remove ~/workspaces/$SLUG --force
 "
+
+# Standalone: just delete
+sudo -u vibe-<name> -H rm -rf ~/workspaces/$SLUG
 ```
 
 ## Listing Active Workspaces
