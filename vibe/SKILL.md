@@ -303,6 +303,36 @@ sudo -u vibe-<name> -H tmux send-keys -t "$SLUG" Escape
 sudo -u vibe-<name> -H tmux capture-pane -t "$SLUG" -p | tail -3
 ```
 
+## Step 5b: Tunnel (optional)
+
+If the worktree needs a public URL (e.g. for webhooks, mobile testing, sharing), add a Cloudflare Tunnel route using the slug as the subdomain.
+
+### Add route to cloudflared config:
+
+```bash
+# The tunnel config is typically at ~/.cloudflared/config.yml (on the host)
+# Add an ingress rule BEFORE the catch-all 404:
+#
+#   - hostname: <slug>.<tunnel-domain>
+#     service: http://localhost:<port>
+
+# Edit the config
+vim ~/.cloudflared/config.yml   # or use sed/edit tool
+
+# Reload cloudflared to pick up the new route
+systemctl restart cloudflared
+```
+
+The tunnel domain and config path are host-specific — check your cloudflared setup.
+
+### DNS:
+
+The subdomain must have a CNAME pointing to the tunnel. If using a wildcard CNAME (`*.ondomain.dev → tunnel`), no DNS changes needed. Otherwise, add the record.
+
+### Cleanup:
+
+Remove the ingress rule and restart cloudflared when the worktree is destroyed.
+
 ## Step 6: Push & PR
 
 After Claude Code finishes (or you've verified the work):
