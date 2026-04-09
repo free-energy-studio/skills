@@ -90,9 +90,10 @@ EOF
 # Fix ownership
 chown vibe-<name>:vibe /home/vibe-<name>/.profile
 
-# Set git identity
-sudo -u vibe-<name> -H git config --global user.name "<Human Name>"
-sudo -u vibe-<name> -H git config --global user.email "<email>"
+# Set git identity + credential helper
+sudo -u vibe-<name> -H bash -c "cd ~ && git config --global user.name '<Human Name>'"
+sudo -u vibe-<name> -H bash -c "cd ~ && git config --global user.email '<email>'"
+sudo -u vibe-<name> -H bash -c "cd ~ && git config --global credential.https://github.com.helper '!/usr/bin/gh auth git-credential'"
 ```
 
 ### Validate credentials:
@@ -120,9 +121,11 @@ Each user needs a bare clone and a canonical `.env` for each repo they work on.
 ```bash
 sudo -u vibe-<name> -H bash -lc "
   mkdir -p ~/repos ~/envs
-  gh repo clone <org>/<repo> ~/repos/<org>--<repo>.git -- --bare
+  git clone --bare https://github.com/<org>/<repo>.git ~/repos/<org>--<repo>.git
 "
 ```
+
+**Note:** Use `git clone --bare`, not `gh repo clone --bare` — the latter stores refs as local branches instead of `origin/*` remotes.
 
 ### Secrets:
 
@@ -173,7 +176,7 @@ BARE_DIR="/home/vibe-<name>/repos/<org>--<repo>.git"
 if [ ! -d "$BARE_DIR" ]; then
   sudo -u vibe-<name> -H bash -lc "
     mkdir -p ~/repos
-    gh repo clone <org>/<repo> ~/repos/<org>--<repo>.git -- --bare
+    git clone --bare https://github.com/<org>/<repo>.git ~/repos/<org>--<repo>.git
   "
 fi
 
