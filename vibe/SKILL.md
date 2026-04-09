@@ -168,7 +168,17 @@ ls /home/vibe-<name>/workspaces/$SLUG 2>/dev/null && echo "COLLISION" || echo "O
 
 ## Step 4: Create Workspace
 
-### Ensure bare repo exists:
+Workspaces can be **repo-backed** (git worktree) or **standalone** (empty directory for prototyping, one-off tasks, or non-repo work).
+
+### Standalone (no repo):
+
+```bash
+sudo -u vibe-<name> -H bash -lc "mkdir -p ~/workspaces/$SLUG"
+```
+
+Skip to Step 5.
+
+### Repo-backed — ensure bare repo exists:
 
 ```bash
 BARE_DIR="/home/vibe-<name>/repos/<org>--<repo>.git"
