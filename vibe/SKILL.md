@@ -216,7 +216,17 @@ if [ -f "$ENV_FILE" ]; then
 fi
 ```
 
-The copy is intentional — worktrees may need overrides (ports, feature flags, test databases).
+The copy is intentional — worktrees may need per-instance overrides.
+
+### Configure env:
+
+After copying, review and adjust the `.env` for the worktree:
+
+1. **Port** — every worktree must use a unique port to avoid conflicts with running services. Check what's in use (`ss -tlnp | grep LISTEN`) and pick an open one.
+2. **Channels / adapters** — disable any that shouldn't run in a dev worktree (messaging bots, webhooks, etc.). Blank the relevant env vars or tokens.
+3. **Other overrides** — feature flags, API endpoints, database URLs as needed.
+
+The canonical env is a starting point, not a final config. Each repo is different — read the `.env` and understand what needs changing for an isolated worktree.
 
 ### Run setup (if repo has it):
 
