@@ -365,6 +365,109 @@ sudo -u vibe-<name> -H bash -lc "
 "
 ```
 
+Capture the PR number from the output (e.g. `https://github.com/org/repo/pull/123` → `123`).
+
+### Step 6b: Review Watch Loop
+
+After the PR is created, watch for review comments and address them automatically.
+
+**Parameters:**
+- `POLL_INTERVAL`: 60 seconds between checks
+- `POLL_TIMEOUT`: 30 minutes max wait for initial review
+- `MAX_ROUNDS`: 5 revision rounds (prevent infinite loops)
+
+#### Poll for reviews:
+
+```bash
+# Fetch pending (non-resolved) review comments
+sudo -u vibe-<name> -H bash -lc "
+  cd ~/workspaces/$SLUG
+  gh api repos/<org>/<repo>/pulls/<PR>/comments \
+    --jq '[.[] | select(.in_reply_to_id == null)] | length'
+"
+```
+
+Poll every `POLL_INTERVAL` seconds. If no comments appear within `POLL_TIMEOUT`, stop watching — the PR is waiting on human review and the agent should move on.
+
+#### For each round (up to MAX_ROUNDS):
+
+**1. Fetch comments:**
+
+```bash
+# Get all pending review comments with file, line, and body
+sudo -u vibe-<name> -H bash -lc "
+  cd ~/workspaces/$SLUG
+  gh api repos/<org>/<repo>/pulls/<PR>/reviews \
+    --jq '[.[] | select(.state == \"CHANGES_REQUESTED\" or .state == \"COMMENTED\")]'
+"
+
+sudo -u vibe-<name> -H bash -lc "
+  cd ~/workspaces/$SLUG
+  gh api repos/<org>/<repo>/pulls/<PR>/comments \
+    --jq '[.[] | {id, path, line, body, in_reply_to_id, created_at}]'
+"
+```
+
+**2. Dispatch Claude Code to fix:**
+
+Run Claude Code in one-shot mode with the comments as context:
+
+```bash
+sudo -u vibe-<name> -H bash -lc "
+  cd ~/workspaces/$SLUG
+  claude --print --dangerously-skip-permissions \
+    'PR review comments to address:
+
+<paste comment JSON here>
+
+For each comment:
+- If it identifies a real issue: fix the code
+- If it is a style nit or suggestion: fix it unless you strongly disagree
+- If it is a question or misunderstanding: note it for response (no code change)
+- If it is outdated or not actionable: skip
+
+After fixing, run: prettier, eslint --fix, and typecheck.
+Commit with message: fix: address PR review feedback'
+"
+```
+
+**3. Push fixes:**
+
+```bash
+sudo -u vibe-<name> -H bash -lc "
+  cd ~/workspaces/$SLUG
+  git push origin HEAD
+"
+```
+
+**4. Respond to comments:**
+
+For each comment, post a reply explaining what was done:
+
+```bash
+# Reply to a specific comment
+sudo -u vibe-<name> -H bash -lc "
+  cd ~/workspaces/$SLUG
+  gh api repos/<org>/<repo>/pulls/<PR>/comments \
+    -X POST \
+    -f body='<response explaining the fix or rationale>' \
+    -F in_reply_to=<comment_id>
+"
+```
+
+Use concise replies: "Fixed" / "Updated — changed X to Y" / "This is intentional because..." — no fluff.
+
+**5. Check for new comments:**
+
+After pushing, wait one `POLL_INTERVAL` and check for new comments. If none, the review loop is done. If new comments arrived (reviewer responded or new review round), continue to the next round.
+
+#### Exit conditions:
+
+- **All comments addressed** and no new comments after push → done ✅
+- **MAX_ROUNDS reached** → stop, report remaining unresolved comments to the agent operator
+- **POLL_TIMEOUT hit** waiting for initial review → stop, workspace stays open for later
+```
+
 ## Step 7: Cleanup
 
 After the PR is merged or work is abandoned, tear down everything associated with the slug.
