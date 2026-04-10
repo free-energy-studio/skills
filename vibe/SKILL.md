@@ -36,6 +36,7 @@ Dispatch coding tasks to Claude Code running as isolated Unix users with git wor
 - **Bare repos**: `~/repos/<org>--<repo>.git` — per-user fetch targets
 - **Env files**: `~/envs/<org>--<repo>.env` — canonical secrets, copied into each worktree
 - **Modes**: one-shot (`--print`) or interactive (tmux) — agent decides
+- **Services**: tunneling requires managed services, not an ad-hoc shell process. Use `vibe-dev-<slug>.service` for the app process and `vibe-tunnel-<slug>.service` for the public URL.
 
 ## Decision: One-Shot vs Interactive
 
@@ -230,7 +231,7 @@ The copy is intentional — worktrees may need per-instance overrides.
 
 ### Configure env:
 
-After copying, review the `.env` and adjust for the worktree. At minimum, set a unique `PORT` to avoid conflicts with running services.
+After copying, review the `.env` and adjust for the worktree. At minimum, set a unique `PORT`. If you will tunnel the workspace, the managed dev service must read the same env.
 
 ### Run setup (if repo has it):
 
@@ -317,35 +318,81 @@ sudo -u vibe-<name> -H tmux send-keys -t "$SLUG" Escape
 sudo -u vibe-<name> -H tmux capture-pane -t "$SLUG" -p | tail -3
 ```
 
-## Step 5b: Tunnel (optional)
+## Step 5b: Tunnel (optional, but service-backed)
 
-If the worktree needs a public URL (e.g. for webhooks, mobile testing, sharing), add a Cloudflare Tunnel route using the slug as the subdomain.
+If the worktree needs a public URL (e.g. for webhooks, mobile testing, sharing), do **not** tunnel directly to a tmux session or an ad-hoc shell process. A tunneled workspace must have two managed services:
 
-### Add route to cloudflared config:
+- `vibe-dev-<slug>.service` — runs the app/dev server on the chosen local port
+- `vibe-tunnel-<slug>.service` — exposes that local port at `<slug>.<tunnel-domain>`
+
+If you cannot create or manage services on the host, do not offer tunneling. Keep the workspace private and tell the user what is missing.
+
+### Required rule
+
+**Whenever tunneling is enabled, enforce managed services for both the app process and the tunnel.**
+
+### Dev service
+
+Create a service whose working directory is the workspace and whose command starts the repo's long-lived app process on the workspace port.
+
+Recommended naming:
 
 ```bash
-# The tunnel config is typically at ~/.cloudflared/config.yml (on the host)
-# Add an ingress rule BEFORE the catch-all 404:
-#
-#   - hostname: <slug>.<tunnel-domain>
-#     service: http://localhost:<port>
-
-# Edit the config
-vim ~/.cloudflared/config.yml   # or use sed/edit tool
-
-# Reload cloudflared to pick up the new route
-systemctl restart cloudflared
+vibe-dev-<slug>.service
 ```
 
-The tunnel domain and config path are host-specific — check your cloudflared setup.
+Recommended behavior:
+- restart automatically on failure
+- run as the appropriate `vibe-<name>` user when possible
+- read the same env as the workspace
+- bind to the workspace's assigned port
 
-### DNS:
+Example shape:
 
-The subdomain must have a CNAME pointing to the tunnel. If using a wildcard CNAME (`*.ondomain.dev → tunnel`), no DNS changes needed. Otherwise, add the record.
+```ini
+[Unit]
+Description=Vibe dev server for <slug>
+After=network.target
 
-### Cleanup:
+[Service]
+User=vibe-<name>
+WorkingDirectory=/home/vibe-<name>/workspaces/<slug>
+Environment=PORT=<port>
+ExecStart=/usr/bin/bash -lc 'cd /home/vibe-<name>/workspaces/<slug> && <dev-command>'
+Restart=always
+RestartSec=5
 
-Remove the ingress rule and restart cloudflared when the worktree is destroyed.
+[Install]
+WantedBy=multi-user.target
+```
+
+### Tunnel service
+
+Create a separate service for the tunnel process or host-managed tunnel binding.
+
+Recommended naming:
+
+```bash
+vibe-tunnel-<slug>.service
+```
+
+If using a shared `cloudflared` config, add an ingress rule for the slug and make sure the host-level tunnel process is reloaded. If using a dedicated tunnel service per workspace, point it at `http://127.0.0.1:<port>` and enable restart behavior.
+
+### Validation
+
+Do not call a tunneled workspace ready until all of the following pass:
+
+```bash
+systemctl is-active vibe-dev-<slug>.service
+systemctl is-active vibe-tunnel-<slug>.service
+curl -I https://<slug>.<tunnel-domain>
+```
+
+The tunnel domain, service manager, and cloudflared config path are host-specific — check the host's actual setup.
+
+### DNS
+
+The subdomain must have a CNAME pointing to the tunnel. If using a wildcard CNAME (`*.ondomain.dev → tunnel`), no DNS changes are needed. Otherwise, add the record.
 
 ## Step 6: Push & PR
 
@@ -482,11 +529,13 @@ sudo -u vibe-<name> -H tmux kill-session -t "${SLUG}-dev" 2>/dev/null
 
 ### Remove tunnel (if created):
 
-Remove the ingress rule for `<slug>.<tunnel-domain>` from the cloudflared config and restart:
+Stop and disable the workspace services first, then remove the tunnel route or dedicated tunnel unit.
 
 ```bash
-# Edit the config to remove the slug's ingress rule
-# Then:
+systemctl disable --now vibe-tunnel-<slug>.service 2>/dev/null || true
+systemctl disable --now vibe-dev-<slug>.service 2>/dev/null || true
+
+# If using a shared cloudflared config, remove the slug's ingress rule and reload.
 systemctl restart cloudflared
 ```
 
@@ -518,6 +567,9 @@ for u in /home/vibe-*/; do
   echo "=== $user ==="
   ls "$u/workspaces/" 2>/dev/null
 done
+
+# Service-backed tunneled workspaces
+systemctl list-units --all --type=service 'vibe-dev-*' 'vibe-tunnel-*'
 ```
 
 ## Troubleshooting
@@ -535,6 +587,14 @@ sudo -u vibe-<name> -H bash -lc "cd ~/repos/<org>--<repo>.git && git branch -D <
 ```bash
 sudo -u vibe-<name> -H tmux kill-session -t "$SLUG"
 ```
+
+**Tunneled URL is flaky or down**: Check the managed services first:
+```bash
+systemctl status vibe-dev-<slug>.service
+systemctl status vibe-tunnel-<slug>.service
+curl -I https://<slug>.<tunnel-domain>
+```
+If the workspace is tunneled, fix the services instead of launching another ad-hoc dev process.
 
 **Push rejected**: Fetch and rebase first:
 ```bash
