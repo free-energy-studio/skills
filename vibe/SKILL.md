@@ -14,7 +14,7 @@ metadata:
     os: ["linux"]
     always: true
     requires:
-      bins: ["claude", "gh", "op"]
+      bins: ["claude", "gh", "op", "linear"]
     install:
       - id: node-claude
         kind: node
@@ -304,6 +304,52 @@ sudo -u vibe-<name> -H bash -lc "
 
 When the task is tied to a Linear ticket, use the Linear git branch name (e.g. `sam/doma-123-fix-auth-token`). You can get it from Linear's UI or via the API. This keeps branches traceable to tickets.
 
+### Linear workflow (when the task is tied to a Linear ticket)
+
+For ticketed work, the vibe flow should also keep Linear in sync. Basic rule: **claim the ticket before coding, move it to review when the PR is up, and mark it done when the work is actually merged or otherwise complete.**
+
+#### Before coding
+
+Assign the issue to the human behind `vibe-<name>` and move it into active work.
+
+```bash
+linear issue update <TICKET-KEY> \
+  --assignee "<Human Name or username>" \
+  --state "In Progress"
+```
+
+If the team's workflow does not use `In Progress`, use the closest equivalent active state.
+
+#### After opening the PR
+
+Move the issue into a review state.
+
+```bash
+linear issue update <TICKET-KEY> --state "In Review"
+```
+
+If the team does not have `In Review`, use the closest review-ready state.
+
+#### If the work is blocked
+
+Reflect that in Linear instead of leaving the ticket looking actively worked:
+
+```bash
+linear issue update <TICKET-KEY> --state "Blocked"
+```
+
+If the team has no blocked state, leave the current state and mention the blocker in your user update.
+
+#### After merge or confirmed completion
+
+Close the loop in Linear:
+
+```bash
+linear issue update <TICKET-KEY> --state "Done"
+```
+
+Only mark the issue done when the code is actually merged, deployed, or otherwise complete by the team's standard, not just because Claude finished a coding pass.
+
 ## Step 5: Run Claude Code
 
 ### Step 5a: Decide the orchestration shape
@@ -500,6 +546,12 @@ sudo -u vibe-<name> -H bash -lc "
 
 Capture the PR number from the output (e.g. `https://github.com/org/repo/pull/123` → `123`).
 
+If this work is tied to a Linear ticket, update the issue state to review at this point if you have not already:
+
+```bash
+linear issue update <TICKET-KEY> --state "In Review"
+```
+
 ### Step 6b: Review Watch Loop
 
 After the PR is created, watch for review comments and address them automatically.
@@ -585,6 +637,12 @@ After pushing, wait one `POLL_INTERVAL` and check for new comments. If none, the
 ## Step 7: Cleanup
 
 After the PR is merged or work is abandoned, tear down everything associated with the slug.
+
+If this work was tied to a Linear ticket, update the issue status before you walk away:
+
+- merged / complete → `Done`
+- genuinely blocked → `Blocked`
+- still waiting on review → leave as `In Review`
 
 ### Remove tunnel (if created):
 
