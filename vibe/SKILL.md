@@ -38,6 +38,16 @@ Dispatch coding tasks to Claude Code running as isolated Unix users with git wor
 - **Modes**: one-shot (`--print`) or interactive (tmux) — agent decides
 - **Services**: tunneling requires managed services, not an ad-hoc shell process. Use `vibe-dev-<slug>.service` for the app process and `vibe-tunnel-<slug>.service` for the public URL.
 
+## Orchestrator Mindset
+
+When using this skill, your primary job is **orchestration**, not personally doing all the coding work.
+
+- **Delegate aggressively.** Use Claude Code for repo exploration, implementation, test/fix loops, review response handling, and other bounded coding tasks. Keep only the orchestration, judgment, and user communication in the parent agent.
+- **Surface status like an operator.** Do not go silent while a sub-agent runs. Tell the user what is happening, what just finished, what is blocked, and what you are doing next.
+- **Surface issues immediately.** If setup fails, auth is broken, the prompt was malformed, tests fail, or the task is underspecified, tell the user promptly instead of waiting for a long run to end.
+- **Treat large work as a sequence of sub-runs.** For a large ticket, epic, or sticky problem, break it into concrete chunks and run Claude Code on one chunk at a time. After each run, inspect the result, decide the next slice, and launch the next run until the larger problem is actually done.
+- **Do not make the user reverse-engineer progress from raw logs.** Summarize the state in plain language.
+
 ## Decision: One-Shot vs Interactive
 
 | Signal | Mode |
@@ -47,8 +57,9 @@ Dispatch coding tasks to Claude Code running as isolated Unix users with git wor
 | Long-running, want to monitor progress | **Interactive** |
 | Quick fix, small scope | **One-shot** |
 | Need to approve/reject Claude Code prompts | **Interactive** |
+| Large multi-part problem that should be split into phases | **Sequential one-shots** by default, **interactive** if you expect active steering |
 
-Default to **one-shot** unless there's a reason to monitor.
+Default to **one-shot** unless there is a reason to monitor. For big problems, default to a **sequence of bounded runs**, not one giant prompt.
 
 ---
 
@@ -126,7 +137,7 @@ sudo -u vibe-<name> -H bash -lc "
 "
 ```
 
-**Note:** Use `git clone --bare`, not `gh repo clone --bare` — the latter stores refs as local branches instead of `origin/*` remotes.
+**Note:** In a bare clone, all remote branches are stored directly under `refs/heads/` (e.g. `refs/heads/main`). There are no `refs/remotes/origin/` tracking refs. When creating worktrees from a bare repo, use branch names like `main` or `HEAD` — **not** `origin/main`.
 
 ### Secrets:
 
@@ -136,13 +147,14 @@ To run repo scripts, create a temporary worktree:
 
 ```bash
 sudo -u vibe-<name> -H bash -lc "
+  TMPWT=/tmp/vibe-env-setup-\$\$
   cd ~/repos/<org>--<repo>.git
-  git worktree add /tmp/vibe-env-setup origin/main
-  cd /tmp/vibe-env-setup
+  git worktree add \$TMPWT HEAD
+  cd \$TMPWT
   # ... run whatever the repo provides to generate .env ...
   cp .env ~/envs/<org>--<repo>.env
   cd ~/repos/<org>--<repo>.git
-  git worktree remove /tmp/vibe-env-setup --force
+  git worktree remove \$TMPWT --force
 "
 ```
 
@@ -152,20 +164,21 @@ This is a **one-time setup** per user per repo. The canonical env file is reused
 
 ## Step 3: Generate Slug
 
-Generate a unique 3-word slug for the workspace:
+Generate a unique 3-word slug for the workspace. The slug script lives next to this skill file — when installed via `install.sh`, it is at `~/.local/share/free-energy-skills/vibe/scripts/slug.sh`.
 
 ```bash
-SLUG=$(bash {baseDir}/scripts/slug.sh)
-echo "$SLUG"
+SKILL_DIR="${HOME}/.local/share/free-energy-skills/vibe"
+
+# Retry until a non-colliding slug is found (collisions are rare but possible)
+while true; do
+  SLUG=$(bash "$SKILL_DIR/scripts/slug.sh")
+  ls "/home/vibe-<name>/workspaces/$SLUG" 2>/dev/null || break
+  echo "Slug collision: $SLUG — retrying..."
+done
+echo "Using slug: $SLUG"
 ```
 
 The script generates `adj-noun-noun` slugs with ~2.1M permutations (100 adjectives × 145 nouns × 145 nouns).
-
-Check it's not already in use:
-
-```bash
-ls /home/vibe-<name>/workspaces/$SLUG 2>/dev/null && echo "COLLISION" || echo "OK"
-```
 
 ## Step 4: Create Workspace
 
@@ -199,13 +212,19 @@ sudo -u vibe-<name> -H bash -lc "cd $BARE_DIR && git fetch origin"
 
 ```bash
 BRANCH="<user>/<feature-name>"  # working branch (see naming below)
-BASE="main"                     # branch to fork from
+
+# Detect the repo's default branch (don't hardcode main)
+BASE=$(sudo -u vibe-<name> -H bash -lc "
+  git -C $BARE_DIR symbolic-ref --short HEAD 2>/dev/null || echo main
+")
 
 sudo -u vibe-<name> -H bash -lc "
   cd $BARE_DIR
-  git worktree add ~/workspaces/$SLUG -b $BRANCH origin/$BASE
+  git worktree add ~/workspaces/$SLUG -b $BRANCH $BASE
 "
 ```
+
+**Important:** Use `$BASE` (the branch name, e.g. `main`), not `origin/$BASE`. In a bare clone, refs live at `refs/heads/`, so `origin/main` does not exist — `main` does.
 
 If the branch already exists remotely:
 
@@ -252,7 +271,55 @@ When the task is tied to a Linear ticket, use the Linear git branch name (e.g. `
 
 ## Step 5: Run Claude Code
 
-### One-Shot Mode
+### Step 5a: Decide the orchestration shape
+
+Before launching Claude Code, decide whether you are dispatching **one bounded task** or **a sequence of tasks**.
+
+#### Small / medium task
+
+Give Claude one clear assignment with acceptance criteria, let it run, then review the result.
+
+#### Large task, epic, or sticky problem
+
+Break the work into sequential slices. If the request maps naturally to subtickets or subproblems, treat each one as its own Claude run.
+
+Typical pattern:
+
+1. **Discovery / scoping pass** — inspect the repo, confirm the real shape of the problem, and propose a concrete implementation plan
+2. **Implementation pass for slice 1** — make the first bounded change
+3. **Validation / repair pass** — run tests, fix regressions, clean up
+4. **Next implementation pass(es)** — continue one slice at a time until the larger job is complete
+
+After each pass:
+
+- inspect the diff and validation output yourself
+- decide whether the next step should be another Claude run, a change in direction, or a user decision
+- send the user a brief status update if the state changed materially
+
+Prefer multiple small Claude runs over one oversized prompt that tries to solve the whole problem blindly.
+
+### Step 5b: User-facing status updates
+
+When vibing, keep the user informed in operator language:
+
+- **At start:** say what sub-agent you launched and what it is working on
+- **At milestones:** report meaningful completions, not token-by-token chatter
+- **At blockers/failures:** explain the issue, impact, and next action immediately
+- **At handoff points:** say whether you are launching another sub-run or waiting on a decision
+
+Good examples:
+
+- "I have Claude doing repo discovery in the new workspace now. Next step is implementation once it confirms the shape."
+- "The workspace is ready, but the setup script failed on missing env generation. I'm fixing bootstrap before launching the coding pass."
+- "Claude finished slice 1 and tests pass. I'm sending it back in for the follow-up cleanup pass."
+
+Bad examples:
+
+- disappearing for a long run with no update
+- dumping raw command output without interpretation
+- waiting until the end to mention the run failed halfway through
+
+### Step 5c: One-Shot Mode
 
 Blocking execution. Stdout returns directly.
 
@@ -265,9 +332,11 @@ sudo -u vibe-<name> -H bash -lc "
 
 Run via `exec`. The agent waits for completion and gets output directly.
 
-For large tasks, use `exec` with `background: true` and monitor via `process`.
+For long tasks, use `exec` with `background: true` and monitor via `process` so you can keep the user updated while the run continues.
 
-### Interactive Mode
+For large tasks, do not default to one huge one-shot. Prefer a sequence of bounded one-shots unless you have a good reason to keep a single interactive session open.
+
+### Step 5d: Interactive Mode
 
 Persistent tmux session. Agent monitors and steers.
 
@@ -295,6 +364,8 @@ sudo -u vibe-<name> -H tmux capture-pane -t "$SLUG" -p | tail -20
 # Check if waiting for input
 sudo -u vibe-<name> -H tmux capture-pane -t "$SLUG" -p | tail -5 | grep -E "❯|yes/no|proceed|Y/n"
 ```
+
+While monitoring, translate what you see into user-facing status. Do not just watch the pane silently.
 
 #### Steer:
 
@@ -405,10 +476,10 @@ sudo -u vibe-<name> -H bash -lc "
   git push origin HEAD
 "
 
-# Open PR
+# Open PR (use $BASE from Step 4 — do not hardcode main)
 sudo -u vibe-<name> -H bash -lc "
   cd ~/workspaces/$SLUG
-  gh pr create --title '<PR title>' --body '<description>' --base main
+  gh pr create --title '<PR title>' --body '<description>' --base $BASE
 "
 ```
 
@@ -577,6 +648,18 @@ systemctl list-units --all --type=service 'vibe-dev-*' 'vibe-tunnel-*'
 **Claude Code EACCES on /root**: Always `cd` to the workspace or `/tmp` before running claude commands. Claude Code tries to resolve the cwd and fails if it's root-owned.
 
 **Auth expired**: Re-pull from 1Password and update the relevant line in `~/.profile`.
+
+**`git worktree add` fails with "invalid reference" or "unknown revision"**: Bare clones store refs under `refs/heads/`, not `refs/remotes/origin/`. Use the branch name directly:
+```bash
+# Wrong — origin/main does not exist in a bare clone:
+git worktree add ~/workspaces/$SLUG -b branch origin/main
+# Right:
+git worktree add ~/workspaces/$SLUG -b branch main
+```
+If the default branch isn't `main`, detect it first:
+```bash
+BASE=$(git -C ~/repos/<org>--<repo>.git symbolic-ref --short HEAD)
+```
 
 **Worktree conflicts**: If branch already exists locally:
 ```bash
