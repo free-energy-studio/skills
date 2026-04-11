@@ -14,7 +14,7 @@ metadata:
     os: ["linux"]
     always: true
     requires:
-      bins: ["claude", "tmux", "gh", "op"]
+      bins: ["claude", "gh", "op"]
     install:
       - id: node-claude
         kind: node
@@ -35,7 +35,9 @@ Dispatch coding tasks to Claude Code running as isolated Unix users with git wor
 - **1Password**: each user has a `<name>.vibe` item with their credentials
 - **Bare repos**: `~/repos/<org>--<repo>.git` — per-user fetch targets
 - **Env files**: `~/envs/<org>--<repo>.env` — canonical secrets, copied into each worktree
-- **Modes**: one-shot (`--print`) or interactive (tmux) — agent decides
+- **ACP alias**: `claude-<name>` — ACP agent id that maps to the shared wrapper for that user
+- **Wrapper**: shared `claude-user-acp` launcher, source-controlled in `scripts/` and installed to `/usr/local/bin/claude-user-acp`
+- **Modes**: bounded ACP runs by default, persistent ACP sessions only when continuity actually helps
 - **Services**: tunneling requires managed services, not an ad-hoc shell process. Use `vibe-dev-<slug>.service` for the app process and `vibe-tunnel-<slug>.service` for the public URL.
 
 ## Orchestrator Mindset
@@ -48,18 +50,17 @@ When using this skill, your primary job is **orchestration**, not personally doi
 - **Treat large work as a sequence of sub-runs.** For a large ticket, epic, or sticky problem, break it into concrete chunks and run Claude Code on one chunk at a time. After each run, inspect the result, decide the next slice, and launch the next run until the larger problem is actually done.
 - **Do not make the user reverse-engineer progress from raw logs.** Summarize the state in plain language.
 
-## Decision: One-Shot vs Interactive
+## Decision: Bounded ACP Runs vs Persistent ACP Sessions
 
 | Signal | Mode |
 |--------|------|
-| Well-defined task, clear acceptance criteria | **One-shot** |
-| Ambiguous task, may need mid-flight steering | **Interactive** |
-| Long-running, want to monitor progress | **Interactive** |
-| Quick fix, small scope | **One-shot** |
-| Need to approve/reject Claude Code prompts | **Interactive** |
-| Large multi-part problem that should be split into phases | **Sequential one-shots** by default, **interactive** if you expect active steering |
+| Well-defined task, clear acceptance criteria | **Bounded ACP run** |
+| Quick fix, small scope | **Bounded ACP run** |
+| Large multi-part problem that should be split into phases | **Sequential bounded ACP runs** |
+| Need continuity across follow-ups in the same workspace | **Persistent ACP session** |
+| Need to keep a long-lived coding session attached to the workspace | **Persistent ACP session** |
 
-Default to **one-shot** unless there is a reason to monitor. For big problems, default to a **sequence of bounded runs**, not one giant prompt.
+Default to **bounded ACP runs**. For big problems, default to a **sequence of bounded runs**, not one giant prompt or a permanently open session.
 
 ---
 
@@ -124,7 +125,41 @@ sudo -u vibe-<name> -H bash -lc 'test -n "$LINEAR_API_KEY" && echo "ok"'
 
 If any credential is missing or invalid, pull fresh from 1Password and update `.profile`.
 
-## Step 2b: Set Up Repo (first time per user per repo)
+## Step 2b: Ensure the Shared ACP Wrapper and Per-User Alias Exist
+
+Vibe is responsible for the Unix-user/workspace model. Claude execution should happen through ACP, using a per-user alias that launches the shared wrapper as the correct Unix user.
+
+### Wrapper source and install path
+
+- Source-controlled wrapper: `{baseDir}/scripts/claude-user-acp`
+- Installed runtime path: `/usr/local/bin/claude-user-acp`
+
+Install or refresh it when missing or outdated:
+
+```bash
+install -m 755 {baseDir}/scripts/claude-user-acp /usr/local/bin/claude-user-acp
+```
+
+### Per-user alias
+
+For `vibe-sam`, the ACP alias should be `claude-sam`.
+
+Register the alias in ACPX config:
+
+```bash
+openclaw config set plugins.entries.acpx.config.agents.claude-<name>.command \
+  "/usr/local/bin/claude-user-acp vibe-<name>"
+```
+
+If you changed the ACPX config, restart the gateway once so the alias is live:
+
+```bash
+openclaw gateway restart
+```
+
+Then verify the alias with a tiny ACP one-shot in a user-owned cwd before trusting it for real work.
+
+## Step 2c: Set Up Repo (first time per user per repo)
 
 Each user needs a bare clone and a canonical `.env` for each repo they work on.
 
@@ -273,7 +308,7 @@ When the task is tied to a Linear ticket, use the Linear git branch name (e.g. `
 
 ### Step 5a: Decide the orchestration shape
 
-Before launching Claude Code, decide whether you are dispatching **one bounded task** or **a sequence of tasks**.
+Before launching Claude Code, decide whether you are dispatching **one bounded ACP run**, **a sequence of runs**, or **a persistent ACP session**.
 
 #### Small / medium task
 
@@ -281,7 +316,7 @@ Give Claude one clear assignment with acceptance criteria, let it run, then revi
 
 #### Large task, epic, or sticky problem
 
-Break the work into sequential slices. If the request maps naturally to subtickets or subproblems, treat each one as its own Claude run.
+Break the work into sequential slices. If the request maps naturally to subtickets or subproblems, treat each one as its own Claude ACP run.
 
 Typical pattern:
 
@@ -296,7 +331,7 @@ After each pass:
 - decide whether the next step should be another Claude run, a change in direction, or a user decision
 - send the user a brief status update if the state changed materially
 
-Prefer multiple small Claude runs over one oversized prompt that tries to solve the whole problem blindly.
+Prefer multiple small Claude ACP runs over one oversized prompt that tries to solve the whole problem blindly.
 
 ### Step 5b: User-facing status updates
 
@@ -310,7 +345,7 @@ When vibing, keep the user informed in operator language:
 Good examples:
 
 - "I have Claude doing repo discovery in the new workspace now. Next step is implementation once it confirms the shape."
-- "The workspace is ready, but the setup script failed on missing env generation. I'm fixing bootstrap before launching the coding pass."
+- "The workspace is ready, but the ACP alias is still misconfigured. I'm fixing the wrapper path before launching the coding pass."
 - "Claude finished slice 1 and tests pass. I'm sending it back in for the follow-up cleanup pass."
 
 Bad examples:
@@ -319,79 +354,59 @@ Bad examples:
 - dumping raw command output without interpretation
 - waiting until the end to mention the run failed halfway through
 
-### Step 5c: One-Shot Mode
+### Step 5c: Bounded ACP Run
 
-Blocking execution. Stdout returns directly.
+Default path. Use the per-user ACP alias in the user-owned workspace.
 
-```bash
-sudo -u vibe-<name> -H bash -lc "
-  cd ~/workspaces/$SLUG
-  claude --print --dangerously-skip-permissions '<task description>'
-"
+Example tool call shape:
+
+```json
+sessions_spawn({
+  runtime: "acp",
+  agentId: "claude-<name>",
+  mode: "run",
+  cwd: "/home/vibe-<name>/workspaces/<slug>",
+  task: "<bounded task with acceptance criteria>",
+  runTimeoutSeconds: 180,
+  timeoutSeconds: 240,
+  cleanup: "delete",
+  streamTo: "parent"
+})
 ```
 
-Run via `exec`. The agent waits for completion and gets output directly.
+Rules:
 
-For long tasks, use `exec` with `background: true` and monitor via `process` so you can keep the user updated while the run continues.
+- `cwd` must be the user-owned workspace, not `/root/...`
+- keep prompts bounded and explicit
+- prefer multiple sequential runs over one giant prompt
+- report meaningful milestones from the child run back to the user
 
-For large tasks, do not default to one huge one-shot. Prefer a sequence of bounded one-shots unless you have a good reason to keep a single interactive session open.
+### Step 5d: Persistent ACP Session
 
-### Step 5d: Interactive Mode
+Use a persistent ACP session only when continuity across follow-ups is genuinely useful.
 
-Persistent tmux session. Agent monitors and steers.
+Example tool call shape:
 
-```bash
-# Create tmux session as the vibe user
-sudo -u vibe-<name> -H tmux new-session -d -s "$SLUG" -c "/home/vibe-<name>/workspaces/$SLUG"
-
-# Launch Claude Code inside
-sudo -u vibe-<name> -H tmux send-keys -t "$SLUG" \
-  "claude --dangerously-skip-permissions" Enter
-
-# Wait for Claude to initialize, then send the task
-sleep 3
-sudo -u vibe-<name> -H tmux send-keys -t "$SLUG" -l -- '<task description>'
-sleep 0.1
-sudo -u vibe-<name> -H tmux send-keys -t "$SLUG" Enter
+```json
+sessions_spawn({
+  runtime: "acp",
+  agentId: "claude-<name>",
+  mode: "session",
+  cwd: "/home/vibe-<name>/workspaces/<slug>",
+  task: "<initial task>",
+  streamTo: "parent"
+})
 ```
 
-#### Monitor:
+After spawn, keep follow-ups routed to that same ACP session instead of opening duplicate sessions. Use persistent sessions sparingly. The default should still be bounded runs.
 
-```bash
-# Check latest output
-sudo -u vibe-<name> -H tmux capture-pane -t "$SLUG" -p | tail -20
+### Step 5e: No tmux fallback
 
-# Check if waiting for input
-sudo -u vibe-<name> -H tmux capture-pane -t "$SLUG" -p | tail -5 | grep -E "❯|yes/no|proceed|Y/n"
-```
+Do not silently drop to tmux or direct `claude --print` execution. If ACP fails, fix the alias, wrapper, auth, or permissions problem and then retry ACP.
 
-While monitoring, translate what you see into user-facing status. Do not just watch the pane silently.
+## Step 6: Tunnel (optional, but service-backed)
 
-#### Steer:
-
-```bash
-# Send follow-up instruction
-sudo -u vibe-<name> -H tmux send-keys -t "$SLUG" -l -- 'Additional instructions here'
-sleep 0.1
-sudo -u vibe-<name> -H tmux send-keys -t "$SLUG" Enter
-
-# Approve a prompt
-sudo -u vibe-<name> -H tmux send-keys -t "$SLUG" 'y' Enter
-
-# Cancel current operation
-sudo -u vibe-<name> -H tmux send-keys -t "$SLUG" Escape
-```
-
-#### Check if done:
-
-```bash
-# Look for the idle prompt (❯) with no activity
-sudo -u vibe-<name> -H tmux capture-pane -t "$SLUG" -p | tail -3
-```
-
-## Step 5b: Tunnel (optional, but service-backed)
-
-If the worktree needs a public URL (e.g. for webhooks, mobile testing, sharing), do **not** tunnel directly to a tmux session or an ad-hoc shell process. A tunneled workspace must have two managed services:
+If the worktree needs a public URL (e.g. for webhooks, mobile testing, sharing), do **not** tunnel directly to an ad-hoc shell process. A tunneled workspace must have two managed services:
 
 - `vibe-dev-<slug>.service` — runs the app/dev server on the chosen local port
 - `vibe-tunnel-<slug>.service` — exposes that local port at `<slug>.<tunnel-domain>`
@@ -528,26 +543,7 @@ sudo -u vibe-<name> -H bash -lc "
 
 **2. Dispatch Claude Code to fix:**
 
-Run Claude Code in one-shot mode with the comments as context:
-
-```bash
-sudo -u vibe-<name> -H bash -lc "
-  cd ~/workspaces/$SLUG
-  claude --print --dangerously-skip-permissions \
-    'PR review comments to address:
-
-<paste comment JSON here>
-
-For each comment:
-- If it identifies a real issue: fix the code
-- If it is a style nit or suggestion: fix it unless you strongly disagree
-- If it is a question or misunderstanding: note it for response (no code change)
-- If it is outdated or not actionable: skip
-
-After fixing, run: prettier, eslint --fix, and typecheck.
-Commit with message: fix: address PR review feedback'
-"
-```
+Run an ACP task through `claude-<name>` with the review comments as context. Keep it bounded: fix the comments, run validation, and summarize any comments that need a human response.
 
 **3. Push fixes:**
 
@@ -590,14 +586,6 @@ After pushing, wait one `POLL_INTERVAL` and check for new comments. If none, the
 
 After the PR is merged or work is abandoned, tear down everything associated with the slug.
 
-### Kill tmux sessions:
-
-```bash
-# Kill all sessions for this workspace (Claude Code + dev server)
-sudo -u vibe-<name> -H tmux kill-session -t "$SLUG" 2>/dev/null
-sudo -u vibe-<name> -H tmux kill-session -t "${SLUG}-dev" 2>/dev/null
-```
-
 ### Remove tunnel (if created):
 
 Stop and disable the workspace services first, then remove the tunnel route or dedicated tunnel unit.
@@ -628,9 +616,6 @@ sudo -u vibe-<name> -H rm -rf ~/workspaces/$SLUG
 ```bash
 # All workspaces for a user
 ls /home/vibe-<name>/workspaces/
-
-# All tmux sessions for a user
-sudo -u vibe-<name> -H tmux list-sessions 2>/dev/null
 
 # All workspaces across all users
 for u in /home/vibe-*/; do
@@ -666,10 +651,7 @@ BASE=$(git -C ~/repos/<org>--<repo>.git symbolic-ref --short HEAD)
 sudo -u vibe-<name> -H bash -lc "cd ~/repos/<org>--<repo>.git && git branch -D <branch>"
 ```
 
-**tmux session exists**: Kill and recreate:
-```bash
-sudo -u vibe-<name> -H tmux kill-session -t "$SLUG"
-```
+**ACP alias missing or wrong user**: Reinstall the shared wrapper, verify `plugins.entries.acpx.config.agents.claude-<name>.command`, restart the gateway, then run a tiny ACP proof task in the workspace before retrying the real job.
 
 **Tunneled URL is flaky or down**: Check the managed services first:
 ```bash

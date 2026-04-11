@@ -1,0 +1,65 @@
+#!/bin/bash
+set -euo pipefail
+
+if [ "$#" -lt 1 ]; then
+  echo "usage: claude-user-acp <unix-user> [acp-args...]" >&2
+  exit 2
+fi
+
+TARGET_USER="$1"
+shift
+REQUEST_CWD="$(pwd)"
+
+exec sudo -n -u "$TARGET_USER" -H \
+  OPENCLAW_WRAPPER_REQUEST_CWD="$REQUEST_CWD" \
+  OPENCLAW_WRAPPER_TARGET_USER="$TARGET_USER" \
+  /bin/bash -lc '
+set -euo pipefail
+
+TARGET_LOG_DIR="$HOME/.cache/openclaw"
+TARGET_LOG_FILE="$TARGET_LOG_DIR/claude-user-acp-wrapper.json"
+mkdir -p "$TARGET_LOG_DIR"
+
+if [ -n "${OPENCLAW_WRAPPER_REQUEST_CWD:-}" ] && cd "$OPENCLAW_WRAPPER_REQUEST_CWD" 2>/dev/null; then
+  :
+else
+  cd "$HOME"
+fi
+
+claude_env_state="absent"
+[ -n "${CLAUDE_CODE_OAUTH_TOKEN:-}" ] && claude_env_state="present"
+gh_env_state="absent"
+[ -n "${GH_TOKEN:-}" ] && gh_env_state="present"
+linear_env_state="absent"
+[ -n "${LINEAR_API_KEY:-}" ] && linear_env_state="present"
+claude_path="$(command -v claude || true)"
+claude_auth_status="unavailable"
+if command -v claude >/dev/null 2>&1; then
+  if claude auth status >/dev/null 2>&1; then
+    claude_auth_status="ok"
+  else
+    claude_auth_status="failed"
+  fi
+fi
+
+cat > "$TARGET_LOG_FILE" <<EOF
+{
+  "requested_user": "${OPENCLAW_WRAPPER_TARGET_USER:-}",
+  "user": "$(id -un)",
+  "uid": "$(id -u)",
+  "gid": "$(id -g)",
+  "home": "$HOME",
+  "pwd": "$PWD",
+  "shell": "${SHELL:-}",
+  "path": "${PATH:-}",
+  "google_application_credentials": "${GOOGLE_APPLICATION_CREDENTIALS:-}",
+  "claude_code_oauth_token": "$claude_env_state",
+  "gh_token": "$gh_env_state",
+  "linear_api_key": "$linear_env_state",
+  "claude_path": "$claude_path",
+  "claude_auth_status": "$claude_auth_status"
+}
+EOF
+
+exec npx -y @agentclientprotocol/claude-agent-acp
+' "$@"
