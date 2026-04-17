@@ -1,6 +1,8 @@
 ---
 name: manage-skill
 description: Install, update, remove, and manage agent skills using `npx skills`. Use when asked to install, add, update, remove, or set up a new skill. Handles discovery, copy-mode installation to ~/.openclaw/skills/, and gateway restart so the skill is immediately available. Triggers on "install skill", "add skill", "update skill", "remove skill", "set up skill", "npx skills".
+always: true
+emoji: 🛠️
 ---
 
 # Install Skill
