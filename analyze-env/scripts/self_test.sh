@@ -14,6 +14,12 @@ assert_contains() {
   [[ "$haystack" == *"$needle"* ]] || fail "expected output to contain: $needle"
 }
 
+assert_not_contains() {
+  local haystack="$1"
+  local needle="$2"
+  [[ "$haystack" != *"$needle"* ]] || fail "expected output not to contain: $needle"
+}
+
 assert_success() {
   local description="$1"
   local output
@@ -44,6 +50,13 @@ trap 'rm -rf "$tmp_dir"' EXIT
 export PROD_DATABASE_URL='postgres://user:secret@example.com:5432/app'
 export ANALYZE_ENV_STATEMENT_TIMEOUT_MS='1000'
 export ANALYZE_ENV_IDLE_TX_TIMEOUT_MS='1000'
+
+bundled_template="$(<"$ROOT/.env.agent.tpl")"
+assert_contains "$bundled_template" "PROD_DATABASE_URL='op://{{ANALYZE_ENV_OP_VAULT}}/{{ANALYZE_ENV_OP_ITEM}}/prod database url'"
+assert_not_contains "$bundled_template" "ANALYZE_ENV_OP_VAULT='"
+assert_not_contains "$bundled_template" "ANALYZE_ENV_STATEMENT_TIMEOUT_MS="
+assert_not_contains "$bundled_template" "RENDER_API_KEY="
+assert_not_contains "$bundled_template" "PROD_LOGS_TOKEN="
 
 db_dry_run="$("$ROOT/scripts/query" --dry-run -c "select id, created_at from jobs limit 5;")"
 assert_contains "$db_dry_run" 'BEGIN READ ONLY;'
@@ -97,10 +110,15 @@ project_source="$("$ROOT/scripts/sync" --project "$project_dir" --no-inject --op
 [[ -f "$project_dir/.env.agent" ]] || fail "expected project .env.agent to be created"
 assert_contains "$project_source" "$project_dir/.env.agent"
 assert_contains "$(<"$project_dir/.env.agent.tpl")" "DATABASE_URL='op://Gibbs/speechtank.env/DATABASE_URL'"
-assert_contains "$(<"$project_dir/.env.agent.tpl")" "OPENAI_API_KEY='op://Gibbs/speechtank.env/OPENAI_API_KEY'"
-assert_contains "$(<"$project_dir/.env.agent.tpl")" "RENDER_API_KEY='op://Gibbs/speechtank.env/RENDER_API_KEY'"
-assert_contains "$(<"$project_dir/.env.agent.tpl")" "VITE_PUBLIC_URL='op://Gibbs/speechtank.env/VITE_PUBLIC_URL'"
+assert_not_contains "$(<"$project_dir/.env.agent.tpl")" "OPENAI_API_KEY="
+assert_not_contains "$(<"$project_dir/.env.agent.tpl")" "RENDER_API_KEY="
+assert_not_contains "$(<"$project_dir/.env.agent.tpl")" "VITE_PUBLIC_URL="
 [[ "$(file_mode "$project_dir/.env.agent")" == "600" ]] || fail "expected project env file mode 600"
+
+empty_project_dir="$tmp_dir/empty-project"
+mkdir -p "$empty_project_dir"
+"$ROOT/scripts/sync" --project "$empty_project_dir" --no-inject --op-vault Gibbs --op-item prod.env --force >/dev/null
+assert_contains "$(<"$empty_project_dir/.env.agent.tpl")" "DATABASE_URL='op://Gibbs/prod.env/DATABASE_URL'"
 
 success_project_dir="$tmp_dir/success-project"
 success_bin="$tmp_dir/success-bin"
@@ -128,8 +146,8 @@ chmod +x "$success_bin/op" "$success_bin/jq"
 
 env PATH="$success_bin:$PATH" "$ROOT/scripts/sync" --project "$success_project_dir" --op-vault Gibbs --op-item prod.env --force >/dev/null
 assert_contains "$(<"$success_project_dir/.env.agent.tpl")" "DATABASE_URL='op://Gibbs/prod.env/DATABASE_URL'"
-assert_contains "$(<"$success_project_dir/.env.agent.tpl")" "OPENAI_API_KEY='op://Gibbs/prod.env/OPENAI_API_KEY'"
-assert_contains "$(<"$success_project_dir/.env.agent.tpl")" "RENDER_API_KEY='op://Gibbs/prod.env/RENDER_API_KEY'"
+assert_not_contains "$(<"$success_project_dir/.env.agent.tpl")" "OPENAI_API_KEY="
+assert_not_contains "$(<"$success_project_dir/.env.agent.tpl")" "RENDER_API_KEY="
 
 quote_template="$tmp_dir/quote.tpl"
 quote_output="$tmp_dir/.env.quote"
