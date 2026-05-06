@@ -1,0 +1,602 @@
+---
+name: vibe
+description: >
+  Dispatch coding tasks to Claude Code via isolated Unix user workspaces.
+  Use when: building features, fixing bugs, prototyping, refactoring,
+  or any coding work that should run in an isolated environment.
+  Triggers on "build this", "fix this", "vibe on", "spin up a workspace",
+  "run claude code on", or any request to delegate coding work.
+  NOT for: simple one-liner edits (use edit tool), reading code (use read tool),
+  or work in the openclaw workspace (never spawn agents here).
+metadata:
+  openclaw:
+    emoji: "⚡"
+    os: ["linux"]
+    always: true
+    requires:
+      bins: ["claude", "tmux", "gh", "op"]
+    install:
+      - id: node-claude
+        kind: node
+        package: "@anthropic-ai/claude-code"
+        bins: ["claude"]
+        label: "Install Claude Code CLI (npm)"
+---
+
+# Vibe — Claude Code Workspaces
+
+Dispatch coding tasks to Claude Code running as isolated Unix users with git worktrees.
+
+## Architecture
+
+- **User**: `vibe-<name>` — Linux account with its own creds and file ownership
+- **Workspace**: git worktree at `~/workspaces/<slug>/`, identified by a 3-word slug
+- **Auth**: `CLAUDE_CODE_OAUTH_TOKEN`, `GH_TOKEN`, `LINEAR_API_KEY` in `~/.profile`
+- **1Password**: each user has a `<name>.vibe` item with their credentials
+- **Bare repos**: `~/repos/<org>--<repo>.git` — per-user fetch targets
+- **Env files**: `~/envs/<org>--<repo>.env` — canonical secrets, copied into each worktree
+- **Modes**: one-shot (`--print`) or interactive (tmux) — agent decides
+- **Services**: tunneling requires managed services, not an ad-hoc shell process. Use `vibe-dev-<slug>.service` for the app process and `vibe-tunnel-<slug>.service` for the public URL.
+
+## Decision: One-Shot vs Interactive
+
+| Signal | Mode |
+|--------|------|
+| Well-defined task, clear acceptance criteria | **One-shot** |
+| Ambiguous task, may need mid-flight steering | **Interactive** |
+| Long-running, want to monitor progress | **Interactive** |
+| Quick fix, small scope | **One-shot** |
+| Need to approve/reject Claude Code prompts | **Interactive** |
+
+Default to **one-shot** unless there's a reason to monitor.
+
+---
+
+## Step 1: Resolve User
+
+Map the requester to a `vibe-<name>` user. Maintain a user roster in your workspace docs (e.g. TEAM.md) mapping people to their vibe username and 1Password item name.
+
+If no user is specified, use the requester's identity. If ambiguous, ask.
+
+## Step 2: Ensure User Exists
+
+Check the user exists and has valid credentials:
+
+```bash
+# Check user exists
+id vibe-<name> >/dev/null 2>&1
+```
+
+### If user doesn't exist — create:
+
+```bash
+# Create user with home dir, add to vibe group
+useradd -m -s /bin/bash -G vibe vibe-<name>
+
+# Pull creds from 1Password and write to profile
+OP_ITEM="<name>.vibe"
+VAULT="<your-vault>"
+
+CLAUDE_TOKEN=$(op read "op://$VAULT/$OP_ITEM/CLAUDE_CODE_OAUTH_TOKEN")
+GH_TOKEN_VAL=$(op read "op://$VAULT/$OP_ITEM/GH_TOKEN")
+LINEAR_KEY=$(op read "op://$VAULT/$OP_ITEM/LINEAR_API_KEY")
+
+# Write to profile (use heredoc with actual values, not variable refs)
+cat >> /home/vibe-<name>/.profile << EOF
+export CLAUDE_CODE_OAUTH_TOKEN='$CLAUDE_TOKEN'
+export GH_TOKEN='$GH_TOKEN_VAL'
+export LINEAR_API_KEY='$LINEAR_KEY'
+EOF
+
+# Fix ownership
+chown vibe-<name>:vibe /home/vibe-<name>/.profile
+
+# Set git identity + credential helper
+sudo -u vibe-<name> -H bash -c "cd ~ && git config --global user.name '<Human Name>'"
+sudo -u vibe-<name> -H bash -c "cd ~ && git config --global user.email '<email>'"
+sudo -u vibe-<name> -H bash -c "cd ~ && git config --global credential.https://github.com.helper '!/usr/bin/gh auth git-credential'"
+```
+
+### Validate credentials:
+
+```bash
+# Claude — check auth (cd to /tmp to avoid EACCES on root-owned dirs)
+sudo -u vibe-<name> -H bash -lc 'cd /tmp && claude auth status 2>&1'
+# Expect: {"loggedIn": true, ...}
+
+# GitHub — check auth
+sudo -u vibe-<name> -H bash -lc 'gh auth status 2>&1'
+
+# Linear — check the var is set
+sudo -u vibe-<name> -H bash -lc 'test -n "$LINEAR_API_KEY" && echo "ok"'
+```
+
+If any credential is missing or invalid, pull fresh from 1Password and update `.profile`.
+
+## Step 2b: Set Up Repo (first time per user per repo)
+
+Each user needs a bare clone and a canonical `.env` for each repo they work on.
+
+### Bare clone:
+
+```bash
+sudo -u vibe-<name> -H bash -lc "
+  mkdir -p ~/repos ~/envs
+  git clone --bare https://github.com/<org>/<repo>.git ~/repos/<org>--<repo>.git
+"
+```
+
+**Note:** Use `git clone --bare`, not `gh repo clone --bare` — the latter stores refs as local branches instead of `origin/*` remotes.
+
+### Secrets:
+
+Repos may provide a script to pull secrets (e.g. a `secrets:pull` script, `op run`, a Makefile target). Check the repo's `package.json`, README, or `.env.example` to determine how.
+
+To run repo scripts, create a temporary worktree:
+
+```bash
+sudo -u vibe-<name> -H bash -lc "
+  cd ~/repos/<org>--<repo>.git
+  git worktree add /tmp/vibe-env-setup origin/main
+  cd /tmp/vibe-env-setup
+  # ... run whatever the repo provides to generate .env ...
+  cp .env ~/envs/<org>--<repo>.env
+  cd ~/repos/<org>--<repo>.git
+  git worktree remove /tmp/vibe-env-setup --force
+"
+```
+
+If the repo has no secrets script, create `~/envs/<org>--<repo>.env` manually from `.env.example` or existing environments.
+
+This is a **one-time setup** per user per repo. The canonical env file is reused across all worktrees.
+
+## Step 3: Generate Slug
+
+Generate a unique 3-word slug for the workspace:
+
+```bash
+SLUG=$(bash {baseDir}/scripts/slug.sh)
+echo "$SLUG"
+```
+
+The script generates `adj-noun-noun` slugs with ~2.1M permutations (100 adjectives × 145 nouns × 145 nouns).
+
+Check it's not already in use:
+
+```bash
+ls /home/vibe-<name>/workspaces/$SLUG 2>/dev/null && echo "COLLISION" || echo "OK"
+```
+
+## Step 4: Create Workspace
+
+Workspaces can be **repo-backed** (git worktree) or **standalone** (empty directory for prototyping, one-off tasks, or non-repo work).
+
+### Standalone (no repo):
+
+```bash
+sudo -u vibe-<name> -H bash -lc "mkdir -p ~/workspaces/$SLUG"
+```
+
+Skip to Step 5.
+
+### Repo-backed — ensure bare repo exists:
+
+```bash
+BARE_DIR="/home/vibe-<name>/repos/<org>--<repo>.git"
+
+if [ ! -d "$BARE_DIR" ]; then
+  sudo -u vibe-<name> -H bash -lc "
+    mkdir -p ~/repos
+    git clone --bare https://github.com/<org>/<repo>.git ~/repos/<org>--<repo>.git
+  "
+fi
+
+# Fetch latest
+sudo -u vibe-<name> -H bash -lc "cd $BARE_DIR && git fetch origin"
+```
+
+### Create worktree:
+
+```bash
+BRANCH="<user>/<feature-name>"  # working branch (see naming below)
+BASE="main"                     # branch to fork from
+
+sudo -u vibe-<name> -H bash -lc "
+  cd $BARE_DIR
+  git worktree add ~/workspaces/$SLUG -b $BRANCH origin/$BASE
+"
+```
+
+If the branch already exists remotely:
+
+```bash
+sudo -u vibe-<name> -H bash -lc "
+  cd $BARE_DIR
+  git fetch origin $BRANCH
+  git worktree add ~/workspaces/$SLUG $BRANCH
+"
+```
+
+### Copy env:
+
+```bash
+ENV_FILE="/home/vibe-<name>/envs/<org>--<repo>.env"
+if [ -f "$ENV_FILE" ]; then
+  cp "$ENV_FILE" /home/vibe-<name>/workspaces/$SLUG/.env
+  chown vibe-<name>:vibe /home/vibe-<name>/workspaces/$SLUG/.env
+fi
+```
+
+The copy is intentional — worktrees may need per-instance overrides.
+
+### Configure env:
+
+After copying, review the `.env` and adjust for the worktree. At minimum, set a unique `PORT`. If you will tunnel the workspace, the managed dev service must read the same env.
+
+### Run setup (if repo has it):
+
+```bash
+sudo -u vibe-<name> -H bash -lc "
+  cd ~/workspaces/$SLUG
+  if [ -f package.json ] && grep -q '\"setup\"' package.json; then
+    bun run setup
+  elif [ -f package.json ]; then
+    bun install
+  fi
+"
+```
+
+### Branch naming:
+
+When the task is tied to a Linear ticket, use the Linear git branch name (e.g. `sam/doma-123-fix-auth-token`). You can get it from Linear's UI or via the API. This keeps branches traceable to tickets.
+
+## Step 5: Run Claude Code
+
+### One-Shot Mode
+
+Blocking execution. Stdout returns directly.
+
+```bash
+sudo -u vibe-<name> -H bash -lc "
+  cd ~/workspaces/$SLUG
+  claude --print --dangerously-skip-permissions '<task description>'
+"
+```
+
+Run via `exec`. The agent waits for completion and gets output directly.
+
+For large tasks, use `exec` with `background: true` and monitor via `process`.
+
+### Interactive Mode
+
+Persistent tmux session. Agent monitors and steers.
+
+```bash
+# Create tmux session as the vibe user
+sudo -u vibe-<name> -H tmux new-session -d -s "$SLUG" -c "/home/vibe-<name>/workspaces/$SLUG"
+
+# Launch Claude Code inside
+sudo -u vibe-<name> -H tmux send-keys -t "$SLUG" \
+  "claude --dangerously-skip-permissions" Enter
+
+# Wait for Claude to initialize, then send the task
+sleep 3
+sudo -u vibe-<name> -H tmux send-keys -t "$SLUG" -l -- '<task description>'
+sleep 0.1
+sudo -u vibe-<name> -H tmux send-keys -t "$SLUG" Enter
+```
+
+#### Monitor:
+
+```bash
+# Check latest output
+sudo -u vibe-<name> -H tmux capture-pane -t "$SLUG" -p | tail -20
+
+# Check if waiting for input
+sudo -u vibe-<name> -H tmux capture-pane -t "$SLUG" -p | tail -5 | grep -E "❯|yes/no|proceed|Y/n"
+```
+
+#### Steer:
+
+```bash
+# Send follow-up instruction
+sudo -u vibe-<name> -H tmux send-keys -t "$SLUG" -l -- 'Additional instructions here'
+sleep 0.1
+sudo -u vibe-<name> -H tmux send-keys -t "$SLUG" Enter
+
+# Approve a prompt
+sudo -u vibe-<name> -H tmux send-keys -t "$SLUG" 'y' Enter
+
+# Cancel current operation
+sudo -u vibe-<name> -H tmux send-keys -t "$SLUG" Escape
+```
+
+#### Check if done:
+
+```bash
+# Look for the idle prompt (❯) with no activity
+sudo -u vibe-<name> -H tmux capture-pane -t "$SLUG" -p | tail -3
+```
+
+## Step 5b: Tunnel (optional, but service-backed)
+
+If the worktree needs a public URL (e.g. for webhooks, mobile testing, sharing), do **not** tunnel directly to a tmux session or an ad-hoc shell process. A tunneled workspace must have two managed services:
+
+- `vibe-dev-<slug>.service` — runs the app/dev server on the chosen local port
+- `vibe-tunnel-<slug>.service` — exposes that local port at `<slug>.<tunnel-domain>`
+
+If you cannot create or manage services on the host, do not offer tunneling. Keep the workspace private and tell the user what is missing.
+
+### Required rule
+
+**Whenever tunneling is enabled, enforce managed services for both the app process and the tunnel.**
+
+### Dev service
+
+Create a service whose working directory is the workspace and whose command starts the repo's long-lived app process on the workspace port.
+
+Recommended naming:
+
+```bash
+vibe-dev-<slug>.service
+```
+
+Recommended behavior:
+- restart automatically on failure
+- run as the appropriate `vibe-<name>` user when possible
+- read the same env as the workspace
+- bind to the workspace's assigned port
+
+Example shape:
+
+```ini
+[Unit]
+Description=Vibe dev server for <slug>
+After=network.target
+
+[Service]
+User=vibe-<name>
+WorkingDirectory=/home/vibe-<name>/workspaces/<slug>
+Environment=PORT=<port>
+ExecStart=/usr/bin/bash -lc 'cd /home/vibe-<name>/workspaces/<slug> && <dev-command>'
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
+```
+
+### Tunnel service
+
+Create a separate service for the tunnel process or host-managed tunnel binding.
+
+Recommended naming:
+
+```bash
+vibe-tunnel-<slug>.service
+```
+
+If using a shared `cloudflared` config, add an ingress rule for the slug and make sure the host-level tunnel process is reloaded. If using a dedicated tunnel service per workspace, point it at `http://127.0.0.1:<port>` and enable restart behavior.
+
+### Validation
+
+Do not call a tunneled workspace ready until all of the following pass:
+
+```bash
+systemctl is-active vibe-dev-<slug>.service
+systemctl is-active vibe-tunnel-<slug>.service
+curl -I https://<slug>.<tunnel-domain>
+```
+
+The tunnel domain, service manager, and cloudflared config path are host-specific — check the host's actual setup.
+
+### DNS
+
+The subdomain must have a CNAME pointing to the tunnel. If using a wildcard CNAME (`*.ondomain.dev → tunnel`), no DNS changes are needed. Otherwise, add the record.
+
+## Step 6: Push & PR
+
+After Claude Code finishes (or you've verified the work):
+
+```bash
+# Push the branch
+sudo -u vibe-<name> -H bash -lc "
+  cd ~/workspaces/$SLUG
+  git push origin HEAD
+"
+
+# Open PR
+sudo -u vibe-<name> -H bash -lc "
+  cd ~/workspaces/$SLUG
+  gh pr create --title '<PR title>' --body '<description>' --base main
+"
+```
+
+Capture the PR number from the output (e.g. `https://github.com/org/repo/pull/123` → `123`).
+
+### Step 6b: Review Watch Loop
+
+After the PR is created, watch for review comments and address them automatically.
+
+**Parameters:**
+- `POLL_INTERVAL`: 60 seconds between checks
+- `POLL_TIMEOUT`: 30 minutes max wait for initial review
+- `MAX_ROUNDS`: 5 revision rounds (prevent infinite loops)
+
+#### Poll for reviews:
+
+```bash
+# Fetch pending (non-resolved) review comments
+sudo -u vibe-<name> -H bash -lc "
+  cd ~/workspaces/$SLUG
+  gh api repos/<org>/<repo>/pulls/<PR>/comments \
+    --jq '[.[] | select(.in_reply_to_id == null)] | length'
+"
+```
+
+Poll every `POLL_INTERVAL` seconds. If no comments appear within `POLL_TIMEOUT`, stop watching — the PR is waiting on human review and the agent should move on.
+
+#### For each round (up to MAX_ROUNDS):
+
+**1. Fetch comments:**
+
+```bash
+# Get all pending review comments with file, line, and body
+sudo -u vibe-<name> -H bash -lc "
+  cd ~/workspaces/$SLUG
+  gh api repos/<org>/<repo>/pulls/<PR>/reviews \
+    --jq '[.[] | select(.state == \"CHANGES_REQUESTED\" or .state == \"COMMENTED\")]'
+"
+
+sudo -u vibe-<name> -H bash -lc "
+  cd ~/workspaces/$SLUG
+  gh api repos/<org>/<repo>/pulls/<PR>/comments \
+    --jq '[.[] | {id, path, line, body, in_reply_to_id, created_at}]'
+"
+```
+
+**2. Dispatch Claude Code to fix:**
+
+Run Claude Code in one-shot mode with the comments as context:
+
+```bash
+sudo -u vibe-<name> -H bash -lc "
+  cd ~/workspaces/$SLUG
+  claude --print --dangerously-skip-permissions \
+    'PR review comments to address:
+
+<paste comment JSON here>
+
+For each comment:
+- If it identifies a real issue: fix the code
+- If it is a style nit or suggestion: fix it unless you strongly disagree
+- If it is a question or misunderstanding: note it for response (no code change)
+- If it is outdated or not actionable: skip
+
+After fixing, run: prettier, eslint --fix, and typecheck.
+Commit with message: fix: address PR review feedback'
+"
+```
+
+**3. Push fixes:**
+
+```bash
+sudo -u vibe-<name> -H bash -lc "
+  cd ~/workspaces/$SLUG
+  git push origin HEAD
+"
+```
+
+**4. Respond to comments:**
+
+For each comment, post a reply explaining what was done:
+
+```bash
+# Reply to a specific comment
+sudo -u vibe-<name> -H bash -lc "
+  cd ~/workspaces/$SLUG
+  gh api repos/<org>/<repo>/pulls/<PR>/comments \
+    -X POST \
+    -f body='<response explaining the fix or rationale>' \
+    -F in_reply_to=<comment_id>
+"
+```
+
+Use concise replies: "Fixed" / "Updated — changed X to Y" / "This is intentional because..." — no fluff.
+
+**5. Check for new comments:**
+
+After pushing, wait one `POLL_INTERVAL` and check for new comments. If none, the review loop is done. If new comments arrived (reviewer responded or new review round), continue to the next round.
+
+#### Exit conditions:
+
+- **All comments addressed** and no new comments after push → done ✅
+- **MAX_ROUNDS reached** → stop, report remaining unresolved comments to the agent operator
+- **POLL_TIMEOUT hit** waiting for initial review → stop, workspace stays open for later
+```
+
+## Step 7: Cleanup
+
+After the PR is merged or work is abandoned, tear down everything associated with the slug.
+
+### Kill tmux sessions:
+
+```bash
+# Kill all sessions for this workspace (Claude Code + dev server)
+sudo -u vibe-<name> -H tmux kill-session -t "$SLUG" 2>/dev/null
+sudo -u vibe-<name> -H tmux kill-session -t "${SLUG}-dev" 2>/dev/null
+```
+
+### Remove tunnel (if created):
+
+Stop and disable the workspace services first, then remove the tunnel route or dedicated tunnel unit.
+
+```bash
+systemctl disable --now vibe-tunnel-<slug>.service 2>/dev/null || true
+systemctl disable --now vibe-dev-<slug>.service 2>/dev/null || true
+
+# If using a shared cloudflared config, remove the slug's ingress rule and reload.
+systemctl restart cloudflared
+```
+
+### Remove workspace:
+
+```bash
+# Repo-backed: remove worktree
+sudo -u vibe-<name> -H bash -lc "
+  cd ~/repos/<org>--<repo>.git
+  git worktree remove ~/workspaces/$SLUG --force
+"
+
+# Standalone: just delete
+sudo -u vibe-<name> -H rm -rf ~/workspaces/$SLUG
+```
+
+## Listing Active Workspaces
+
+```bash
+# All workspaces for a user
+ls /home/vibe-<name>/workspaces/
+
+# All tmux sessions for a user
+sudo -u vibe-<name> -H tmux list-sessions 2>/dev/null
+
+# All workspaces across all users
+for u in /home/vibe-*/; do
+  user=$(basename "$u")
+  echo "=== $user ==="
+  ls "$u/workspaces/" 2>/dev/null
+done
+
+# Service-backed tunneled workspaces
+systemctl list-units --all --type=service 'vibe-dev-*' 'vibe-tunnel-*'
+```
+
+## Troubleshooting
+
+**Claude Code EACCES on /root**: Always `cd` to the workspace or `/tmp` before running claude commands. Claude Code tries to resolve the cwd and fails if it's root-owned.
+
+**Auth expired**: Re-pull from 1Password and update the relevant line in `~/.profile`.
+
+**Worktree conflicts**: If branch already exists locally:
+```bash
+sudo -u vibe-<name> -H bash -lc "cd ~/repos/<org>--<repo>.git && git branch -D <branch>"
+```
+
+**tmux session exists**: Kill and recreate:
+```bash
+sudo -u vibe-<name> -H tmux kill-session -t "$SLUG"
+```
+
+**Tunneled URL is flaky or down**: Check the managed services first:
+```bash
+systemctl status vibe-dev-<slug>.service
+systemctl status vibe-tunnel-<slug>.service
+curl -I https://<slug>.<tunnel-domain>
+```
+If the workspace is tunneled, fix the services instead of launching another ad-hoc dev process.
+
+**Push rejected**: Fetch and rebase first:
+```bash
+sudo -u vibe-<name> -H bash -lc "cd ~/workspaces/$SLUG && git pull --rebase origin main"
+```

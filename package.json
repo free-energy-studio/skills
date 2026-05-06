@@ -4,9 +4,10 @@
   "workspaces": [
     "ralph",
     "linear",
-    "dev-workflow",
     "firecrawl",
+    "vibe-coding",
+    "twilio",
     "analyze-env"
   ],
-  "version": "0.0.16"
+  "version": "0.0.44"
 }
