@@ -40,6 +40,19 @@ scripts/query -c "select id, status, created_at from jobs where created_at > now
 
 The project-local `.env.agent.tpl` is the source of truth for analysis credentials. Keep it minimal: database connection variables are the only defaults. Add provider, log, DNS, server, or metrics env vars only when the current investigation needs them and the project or user provides a concrete source. Prefer project code and available env vars over assumptions.
 
+Optional examples to add only when relevant:
+
+```bash
+RENDER_API_KEY='op://Vault/Item/RENDER_API_KEY'
+RENDER_SERVICE_ID='srv-...'
+CLOUDFLARE_API_TOKEN='op://Vault/Item/CLOUDFLARE_API_TOKEN'
+CLOUDFLARE_ZONE_ID='op://Vault/Item/CLOUDFLARE_ZONE_ID'
+PROD_LOGS_ENDPOINT='https://logs.example.com'
+PROD_LOGS_TOKEN='op://Vault/Item/PROD_LOGS_TOKEN'
+```
+
+Treat these as examples, not required variables. If an env var is absent, inspect the project and available credentials before deciding whether that service should be profiled.
+
 ## Maintenance
 
 After editing bundled scripts, run:
