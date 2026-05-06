@@ -5,7 +5,8 @@
     "ralph",
     "linear",
     "dev-workflow",
-    "firecrawl"
+    "firecrawl",
+    "analyze-env"
   ],
   "version": "0.0.16"
 }

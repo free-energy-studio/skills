@@ -1,0 +1,192 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+usage() {
+  cat <<'EOF'
+Usage:
+  query [--url-env VAR] [--timeout-ms N] [--idle-timeout-ms N] [-c SQL]
+  query [--url-env VAR] [--timeout-ms N] [--idle-timeout-ms N] -f FILE
+  SQL | query [--url-env VAR]
+
+Runs PostgreSQL SQL through psql with client-side read-only guardrails:
+  - reads the database URL from PROD_DATABASE_URL by default
+  - appends read-only libpq options to the URL used for this invocation
+  - exports PGOPTIONS with default_transaction_read_only=on
+  - wraps the SQL in BEGIN READ ONLY ... ROLLBACK
+  - rejects psql meta-commands, writes, DDL, transactions, and side effects
+
+Options:
+  --url-env VAR          Environment variable containing the database URL.
+  --timeout-ms N         Statement timeout in milliseconds.
+  --idle-timeout-ms N    Idle-in-transaction timeout in milliseconds.
+  -c, --command SQL      SQL text to execute.
+  -f, --file FILE        SQL file to execute. Use - for stdin.
+  --dry-run              Print the redacted plan and wrapped SQL; do not run psql.
+  -h, --help             Show this help.
+EOF
+}
+
+die() {
+  printf 'query: %s\n' "$*" >&2
+  exit 1
+}
+
+redact_url() {
+  sed -E 's#(postgres(ql)?://)([^/@:]+)(:[^/@]*)?@#\1[redacted]@#' <<<"$1"
+}
+
+append_pg_param() {
+  local url="$1"
+  local param="$2"
+  local sep='?'
+  [[ "$url" == *\?* ]] && sep='&'
+  printf '%s%s%s' "$url" "$sep" "$param"
+}
+
+validate_timeout() {
+  local name="$1"
+  local value="$2"
+  [[ "$value" =~ ^[0-9]+$ ]] || die "$name must be an integer number of milliseconds."
+  (( value > 0 )) || die "$name must be greater than zero."
+}
+
+reject_unsafe_sql() {
+  local sql="$1"
+  local lowered
+  lowered="$(tr '[:upper:]' '[:lower:]' <<<"$sql")"
+
+  if grep -Eq '(^|[[:space:]])\\[[:alnum:]!?]' <<<"$lowered"; then
+    die "psql meta-commands are not allowed."
+  fi
+
+  if grep -Eq '(^|[^a-z_])(insert|update|delete|merge|create|alter|drop|truncate|grant|revoke|comment|refresh|call|do|notify|listen|lock|begin|commit|rollback)([^a-z_]|$)' <<<"$lowered"; then
+    die "SQL contains a write, DDL, transaction, or side-effect statement."
+  fi
+
+  if grep -Eq '(^|;)[[:space:]]*(vacuum|analyze|reindex|cluster)([[:space:];(]|$)' <<<"$lowered"; then
+    die "maintenance statements are not allowed."
+  fi
+
+  if grep -Eq '(^|[^a-z_])set[[:space:]]+(session|transaction|role)([^a-z_]|$)' <<<"$lowered"; then
+    die "session, transaction, and role changes are not allowed."
+  fi
+
+  if grep -Eq '(^|[^a-z_])copy[[:space:]].*[[:space:]]from([^a-z_]|$)' <<<"$lowered"; then
+    die "COPY FROM is not allowed."
+  fi
+
+  if grep -Eq '(^|[^a-z_])(nextval|setval|pg_notify|pg_advisory_lock|pg_try_advisory_lock|lo_import|lo_export)[[:space:]]*[(]' <<<"$lowered"; then
+    die "SQL contains a side-effect function."
+  fi
+}
+
+url_env='PROD_DATABASE_URL'
+timeout_ms="${PROD_PROFILE_STATEMENT_TIMEOUT_MS:-60000}"
+idle_timeout_ms="${PROD_PROFILE_IDLE_TX_TIMEOUT_MS:-60000}"
+sql=''
+sql_file=''
+dry_run=0
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --url-env)
+      [[ $# -ge 2 ]] || die "--url-env requires a value."
+      url_env="$2"
+      shift 2
+      ;;
+    --timeout-ms)
+      [[ $# -ge 2 ]] || die "--timeout-ms requires a value."
+      timeout_ms="$2"
+      shift 2
+      ;;
+    --idle-timeout-ms)
+      [[ $# -ge 2 ]] || die "--idle-timeout-ms requires a value."
+      idle_timeout_ms="$2"
+      shift 2
+      ;;
+    -c|--command)
+      [[ $# -ge 2 ]] || die "$1 requires SQL text."
+      sql="$2"
+      shift 2
+      ;;
+    -f|--file)
+      [[ $# -ge 2 ]] || die "$1 requires a file path."
+      sql_file="$2"
+      shift 2
+      ;;
+    --dry-run)
+      dry_run=1
+      shift
+      ;;
+    -h|--help)
+      usage
+      exit 0
+      ;;
+    --)
+      shift
+      break
+      ;;
+    -*)
+      die "unknown option: $1"
+      ;;
+    *)
+      sql="$*"
+      break
+      ;;
+  esac
+done
+
+validate_timeout "statement timeout" "$timeout_ms"
+validate_timeout "idle transaction timeout" "$idle_timeout_ms"
+
+if [[ -n "$sql_file" ]]; then
+  [[ -z "$sql" ]] || die "use either --command or --file, not both."
+  if [[ "$sql_file" == '-' ]]; then
+    sql="$(cat)"
+  else
+    [[ -r "$sql_file" ]] || die "cannot read SQL file: $sql_file"
+    sql="$(<"$sql_file")"
+  fi
+elif [[ -z "$sql" && ! -t 0 ]]; then
+  sql="$(cat)"
+fi
+
+[[ -n "${sql//[[:space:]]/}" ]] || die "no SQL supplied. Use --command, --file, or stdin."
+reject_unsafe_sql "$sql"
+
+[[ "$url_env" =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]] || die "--url-env must be a valid environment variable name."
+raw_url="${!url_env:-}"
+[[ -n "$raw_url" ]] || die "$url_env is not set."
+case "$raw_url" in
+  postgres://*|postgresql://*) ;;
+  *) die "$url_env must contain a PostgreSQL URL. Unsupported databases need a dedicated read-only adapter." ;;
+esac
+
+ro_url="$(append_pg_param "$raw_url" 'application_name=codex_analyze_env_ro')"
+ro_url="$(append_pg_param "$ro_url" "options=-c%20default_transaction_read_only%3Don%20-c%20statement_timeout%3D${timeout_ms}%20-c%20idle_in_transaction_session_timeout%3D${idle_timeout_ms}")"
+
+tmp_sql="$(mktemp)"
+trap 'rm -f "$tmp_sql"' EXIT
+
+{
+  printf 'BEGIN READ ONLY;\n'
+  printf 'SET LOCAL statement_timeout = %s;\n' "$timeout_ms"
+  printf 'SET LOCAL idle_in_transaction_session_timeout = %s;\n' "$idle_timeout_ms"
+  printf '%s\n' "$sql"
+  printf 'ROLLBACK;\n'
+} >"$tmp_sql"
+
+if (( dry_run )); then
+  printf 'URL env: %s\n' "$url_env"
+  printf 'Read-only URL: %s\n' "$(redact_url "$ro_url")"
+  printf 'SQL sent to psql:\n'
+  sed -n '1,200p' "$tmp_sql"
+  exit 0
+fi
+
+command -v psql >/dev/null 2>&1 || die "psql is required but was not found on PATH."
+
+export PGOPTIONS="${PGOPTIONS:-} -c default_transaction_read_only=on -c statement_timeout=${timeout_ms} -c idle_in_transaction_session_timeout=${idle_timeout_ms}"
+export PGAPPNAME="${PGAPPNAME:-codex_analyze_env_ro}"
+
+psql "$ro_url" --set=ON_ERROR_STOP=1 --no-psqlrc --file "$tmp_sql"

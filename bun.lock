@@ -25,6 +25,10 @@
         "typescript": "^5",
       },
     },
+    "analyze-env": {
+      "name": "analyze-env",
+      "version": "1.0.0",
+    },
     "ralph": {
       "name": "ralph",
       "version": "1.2.2",
@@ -51,6 +55,8 @@
     "graphql": ["graphql@16.13.1", "", {}, "sha512-gGgrVCoDKlIZ8fIqXBBb0pPKqDgki0Z/FSKNiQzSGj2uEYHr1tq5wmBegGwJx6QB5S5cM0khSBpi/JFHMCvsmQ=="],
 
     "linear": ["linear@workspace:linear"],
+
+    "analyze-env": ["analyze-env@workspace:analyze-env"],
 
     "ralph": ["ralph@workspace:ralph"],
 
