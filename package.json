@@ -6,7 +6,8 @@
     "linear",
     "firecrawl",
     "vibe-coding",
-    "twilio"
+    "twilio",
+    "analyze-env"
   ],
   "version": "0.0.44"
 }
