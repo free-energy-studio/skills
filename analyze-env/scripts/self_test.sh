@@ -55,6 +55,10 @@ assert_failure \
   "$ROOT/scripts/query" --dry-run -c "update users set name = 'x' where id = 1;"
 
 assert_failure \
+  "db helper rejects all copy statements" \
+  "$ROOT/scripts/query" --dry-run -c "copy (select 1) to program 'cat';"
+
+assert_failure \
   "db helper rejects side-effect functions" \
   "$ROOT/scripts/query" --dry-run -c "select pg_notify('events', 'payload');"
 
@@ -97,6 +101,52 @@ assert_contains "$(<"$project_dir/.env.agent.tpl")" "OPENAI_API_KEY='op://Gibbs/
 assert_contains "$(<"$project_dir/.env.agent.tpl")" "RENDER_API_KEY='op://Gibbs/speechtank.env/RENDER_API_KEY'"
 assert_contains "$(<"$project_dir/.env.agent.tpl")" "VITE_PUBLIC_URL='op://Gibbs/speechtank.env/VITE_PUBLIC_URL'"
 [[ "$(file_mode "$project_dir/.env.agent")" == "600" ]] || fail "expected project env file mode 600"
+
+success_project_dir="$tmp_dir/success-project"
+success_bin="$tmp_dir/success-bin"
+mkdir -p "$success_project_dir/src" "$success_bin"
+printf "OPENAI_API_KEY=\n" > "$success_project_dir/.env.example"
+printf "console.log(process.env.RENDER_API_KEY);\n" > "$success_project_dir/src/app.ts"
+cat > "$success_bin/op" <<'EOS'
+#!/usr/bin/env bash
+if [[ "$1" == "item" && "$2" == "get" ]]; then
+  printf '{"fields":[{"label":"DATABASE_URL"}]}\n'
+  exit 0
+fi
+if [[ "$1" == "read" ]]; then
+  printf 'secret-value'
+  exit 0
+fi
+exit 1
+EOS
+cat > "$success_bin/jq" <<'EOS'
+#!/usr/bin/env bash
+cat >/dev/null
+printf 'DATABASE_URL\n'
+EOS
+chmod +x "$success_bin/op" "$success_bin/jq"
+
+env PATH="$success_bin:$PATH" "$ROOT/scripts/sync" --project "$success_project_dir" --op-vault Gibbs --op-item prod.env --force >/dev/null
+assert_contains "$(<"$success_project_dir/.env.agent.tpl")" "DATABASE_URL='op://Gibbs/prod.env/DATABASE_URL'"
+assert_contains "$(<"$success_project_dir/.env.agent.tpl")" "OPENAI_API_KEY='op://Gibbs/prod.env/OPENAI_API_KEY'"
+assert_contains "$(<"$success_project_dir/.env.agent.tpl")" "RENDER_API_KEY='op://Gibbs/prod.env/RENDER_API_KEY'"
+
+quote_template="$tmp_dir/quote.tpl"
+quote_output="$tmp_dir/.env.quote"
+printf "QUOTED_SECRET='op://Vault/Item/KEY'\n" > "$quote_template"
+cat > "$success_bin/op" <<'EOS'
+#!/usr/bin/env bash
+if [[ "$1" == "read" ]]; then
+  printf "foo'bar"
+  exit 0
+fi
+exit 1
+EOS
+chmod +x "$success_bin/op"
+env PATH="$success_bin:$PATH" "$ROOT/scripts/sync" --template "$quote_template" --output "$quote_output" --force >/dev/null
+assert_contains "$(<"$quote_output")" "QUOTED_SECRET='foo'\\''bar'"
+loaded_secret="$(bash -c 'set -a; . "$1"; set +a; printf "%s" "$QUOTED_SECRET"' bash "$quote_output")"
+[[ "$loaded_secret" == "foo'bar" ]] || fail "expected shell-escaped secret to source safely"
 
 fail_project_dir="$tmp_dir/fail-project"
 fake_bin="$tmp_dir/fake-bin"

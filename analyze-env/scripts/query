@@ -71,8 +71,8 @@ reject_unsafe_sql() {
     die "session, transaction, and role changes are not allowed."
   fi
 
-  if grep -Eq '(^|[^a-z_])copy[[:space:]].*[[:space:]]from([^a-z_]|$)' <<<"$lowered"; then
-    die "COPY FROM is not allowed."
+  if grep -Eq '(^|[^a-z_])copy([^a-z_]|$)' <<<"$lowered"; then
+    die "COPY statements are not allowed."
   fi
 
   if grep -Eq '(^|[^a-z_])(nextval|setval|pg_notify|pg_advisory_lock|pg_try_advisory_lock|lo_import|lo_export)[[:space:]]*[(]' <<<"$lowered"; then

@@ -2,3 +2,5 @@
 .ralph/
 .claude/
 node_modules/
+.env.agent
+.agent-profile/
