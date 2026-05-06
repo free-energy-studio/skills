@@ -15,7 +15,7 @@ Use this skill to materialize analysis credentials and inspect an environment. D
    ```bash
    eval "$(/path/to/analyze-env/scripts/sync --project . --op-vault ProdVault --op-item 'Prod Env' --force --print-source)"
    ```
-   If `.env.agent.tpl` is missing, `sync` creates it by scanning `.env.example`, `.env.sample`, `.env.defaults`, and code references such as `process.env.NAME` and `import.meta.env.NAME`. It then writes `.env.agent` and prints source commands. `sync` also accepts `PROD_PROFILE_OP_VAULT` and `PROD_PROFILE_OP_ITEM` from the environment.
+   If `.env.agent.tpl` is missing, `sync` creates it by scanning `.env.example`, `.env.sample`, `.env.defaults`, and code references such as `process.env.NAME` and `import.meta.env.NAME`. It then writes `.env.agent` and prints source commands. Prefer passing `--op-vault` and `--op-item`; `ANALYZE_ENV_OP_VAULT` and `ANALYZE_ENV_OP_ITEM` are optional fallbacks for repeated runs.
 2. Scope the question before touching prod: time window, resource ID, user/customer ID, request ID, table set, log filter, DNS name, or provider/service.
 3. Query databases only through `scripts/query`. Use `--url-env DATABASE_URL` or another discovered variable when the project does not use `PROD_DATABASE_URL`. Do not connect with raw database URLs, ORM consoles, migration tools, or ad hoc `psql` commands for analysis.
 4. For logs, server state, DNS, metrics, and provider APIs, choose the narrowest read-only command or API based on available env vars, project code, and installed CLIs. Do not restart services, redeploy, mutate DNS, write files, clear caches, rotate logs, run migrations, or change provider config without explicit user confirmation.
@@ -25,7 +25,7 @@ Use this skill to materialize analysis credentials and inspect an environment. D
 
 - `scripts/query` reads `PROD_DATABASE_URL` by default and supports `--url-env` for another PostgreSQL URL variable.
 - Run `scripts/query --dry-run ...` before the first query when changing URL variables, timeout settings, or query shape.
-- Keep queries bounded: select explicit columns, add `LIMIT`, filter by indexed IDs or timestamps, and use `PROD_PROFILE_STATEMENT_TIMEOUT_MS`.
+- Keep queries bounded: select explicit columns, add `LIMIT`, filter by indexed IDs or timestamps, and use `ANALYZE_ENV_STATEMENT_TIMEOUT_MS`.
 - Use `EXPLAIN` before heavy queries. Use `EXPLAIN ANALYZE` only when runtime evidence is necessary and the query is narrowly scoped.
 - If `scripts/query` rejects SQL, treat that as a stop condition. Revise the query or ask for explicit user confirmation before using any separate write-capable tooling.
 

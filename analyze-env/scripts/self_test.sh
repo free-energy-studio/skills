@@ -42,8 +42,8 @@ tmp_dir="$(mktemp -d)"
 trap 'rm -rf "$tmp_dir"' EXIT
 
 export PROD_DATABASE_URL='postgres://user:secret@example.com:5432/app'
-export PROD_PROFILE_STATEMENT_TIMEOUT_MS='1000'
-export PROD_PROFILE_IDLE_TX_TIMEOUT_MS='1000'
+export ANALYZE_ENV_STATEMENT_TIMEOUT_MS='1000'
+export ANALYZE_ENV_IDLE_TX_TIMEOUT_MS='1000'
 
 db_dry_run="$("$ROOT/scripts/query" --dry-run -c "select id, created_at from jobs limit 5;")"
 assert_contains "$db_dry_run" 'BEGIN READ ONLY;'
@@ -74,12 +74,12 @@ assert_contains "$load_output" "$output"
 
 op_template="$tmp_dir/env.op.tpl"
 op_output="$tmp_dir/.env.op"
-printf "PROD_DATABASE_URL='op://{{PROD_PROFILE_OP_VAULT}}/{{PROD_PROFILE_OP_ITEM}}/prod database url'\n" > "$op_template"
+printf "PROD_DATABASE_URL='op://{{ANALYZE_ENV_OP_VAULT}}/{{ANALYZE_ENV_OP_ITEM}}/prod database url'\n" > "$op_template"
 
 "$ROOT/scripts/sync" --template "$op_template" --output "$op_output" --no-inject --op-vault ProdVault --op-item 'Render Prod' >/dev/null
 assert_contains "$(<"$op_output")" "op://ProdVault/Render Prod/prod database url"
 
-PROD_PROFILE_OP_VAULT=EnvVault PROD_PROFILE_OP_ITEM=EnvItem \
+ANALYZE_ENV_OP_VAULT=EnvVault ANALYZE_ENV_OP_ITEM=EnvItem \
   "$ROOT/scripts/sync" --template "$op_template" --output "$op_output" --no-inject --force >/dev/null
 assert_contains "$(<"$op_output")" "op://EnvVault/EnvItem/prod database url"
 

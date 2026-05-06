@@ -81,8 +81,8 @@ reject_unsafe_sql() {
 }
 
 url_env='PROD_DATABASE_URL'
-timeout_ms="${PROD_PROFILE_STATEMENT_TIMEOUT_MS:-60000}"
-idle_timeout_ms="${PROD_PROFILE_IDLE_TX_TIMEOUT_MS:-60000}"
+timeout_ms="${ANALYZE_ENV_STATEMENT_TIMEOUT_MS:-60000}"
+idle_timeout_ms="${ANALYZE_ENV_IDLE_TX_TIMEOUT_MS:-60000}"
 sql=''
 sql_file=''
 dry_run=0
