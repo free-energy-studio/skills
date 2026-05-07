@@ -52,8 +52,9 @@ export ANALYZE_ENV_STATEMENT_TIMEOUT_MS='1000'
 export ANALYZE_ENV_IDLE_TX_TIMEOUT_MS='1000'
 
 bundled_template="$(<"$ROOT/.env.agent.tpl")"
+assert_contains "$bundled_template" "ANALYZE_ENV_OP_VAULT='{{ANALYZE_ENV_OP_VAULT}}'"
+assert_contains "$bundled_template" "ANALYZE_ENV_OP_ITEM='{{ANALYZE_ENV_OP_ITEM}}'"
 assert_contains "$bundled_template" "PROD_DATABASE_URL='op://{{ANALYZE_ENV_OP_VAULT}}/{{ANALYZE_ENV_OP_ITEM}}/prod database url'"
-assert_not_contains "$bundled_template" "ANALYZE_ENV_OP_VAULT='"
 assert_not_contains "$bundled_template" "ANALYZE_ENV_STATEMENT_TIMEOUT_MS="
 assert_not_contains "$bundled_template" "RENDER_API_KEY="
 assert_not_contains "$bundled_template" "PROD_LOGS_TOKEN="
@@ -87,14 +88,30 @@ assert_contains "$load_output" "$output"
 
 op_template="$tmp_dir/env.op.tpl"
 op_output="$tmp_dir/.env.op"
-printf "PROD_DATABASE_URL='op://{{ANALYZE_ENV_OP_VAULT}}/{{ANALYZE_ENV_OP_ITEM}}/prod database url'\n" > "$op_template"
+{
+  printf "ANALYZE_ENV_OP_VAULT='{{ANALYZE_ENV_OP_VAULT}}'\n"
+  printf "ANALYZE_ENV_OP_ITEM='{{ANALYZE_ENV_OP_ITEM}}'\n"
+  printf "PROD_DATABASE_URL='op://{{ANALYZE_ENV_OP_VAULT}}/{{ANALYZE_ENV_OP_ITEM}}/prod database url'\n"
+} > "$op_template"
 
 "$ROOT/scripts/sync" --template "$op_template" --output "$op_output" --no-inject --op-vault ProdVault --op-item 'Render Prod' >/dev/null
+assert_contains "$(<"$op_output")" "ANALYZE_ENV_OP_VAULT='ProdVault'"
+assert_contains "$(<"$op_output")" "ANALYZE_ENV_OP_ITEM='Render Prod'"
 assert_contains "$(<"$op_output")" "op://ProdVault/Render Prod/prod database url"
 
 ANALYZE_ENV_OP_VAULT=EnvVault ANALYZE_ENV_OP_ITEM=EnvItem \
   "$ROOT/scripts/sync" --template "$op_template" --output "$op_output" --no-inject --force >/dev/null
 assert_contains "$(<"$op_output")" "op://EnvVault/EnvItem/prod database url"
+
+template_default="$tmp_dir/env.template-default.tpl"
+template_default_output="$tmp_dir/.env.template-default"
+{
+  printf "ANALYZE_ENV_OP_VAULT='TplVault'\n"
+  printf "ANALYZE_ENV_OP_ITEM='TplItem'\n"
+  printf "PROD_DATABASE_URL='op://{{ANALYZE_ENV_OP_VAULT}}/{{ANALYZE_ENV_OP_ITEM}}/prod database url'\n"
+} > "$template_default"
+"$ROOT/scripts/sync" --template "$template_default" --output "$template_default_output" --no-inject >/dev/null
+assert_contains "$(<"$template_default_output")" "op://TplVault/TplItem/prod database url"
 
 assert_failure \
   "sync requires op item when template uses item placeholder" \
@@ -109,15 +126,21 @@ project_source="$("$ROOT/scripts/sync" --project "$project_dir" --no-inject --op
 [[ -f "$project_dir/.env.agent.tpl" ]] || fail "expected project .env.agent.tpl to be created"
 [[ -f "$project_dir/.env.agent" ]] || fail "expected project .env.agent to be created"
 assert_contains "$project_source" "$project_dir/.env.agent"
+assert_contains "$(<"$project_dir/.env.agent.tpl")" "ANALYZE_ENV_OP_VAULT='Gibbs'"
+assert_contains "$(<"$project_dir/.env.agent.tpl")" "ANALYZE_ENV_OP_ITEM='speechtank.env'"
 assert_contains "$(<"$project_dir/.env.agent.tpl")" "DATABASE_URL='op://Gibbs/speechtank.env/DATABASE_URL'"
 assert_not_contains "$(<"$project_dir/.env.agent.tpl")" "OPENAI_API_KEY="
 assert_not_contains "$(<"$project_dir/.env.agent.tpl")" "RENDER_API_KEY="
 assert_not_contains "$(<"$project_dir/.env.agent.tpl")" "VITE_PUBLIC_URL="
 [[ "$(file_mode "$project_dir/.env.agent")" == "600" ]] || fail "expected project env file mode 600"
+"$ROOT/scripts/sync" --project "$project_dir" --no-inject --force >/dev/null
+assert_contains "$(<"$project_dir/.env.agent")" "DATABASE_URL='op://Gibbs/speechtank.env/DATABASE_URL'"
 
 empty_project_dir="$tmp_dir/empty-project"
 mkdir -p "$empty_project_dir"
 "$ROOT/scripts/sync" --project "$empty_project_dir" --no-inject --op-vault Gibbs --op-item prod.env --force >/dev/null
+assert_contains "$(<"$empty_project_dir/.env.agent.tpl")" "ANALYZE_ENV_OP_VAULT='Gibbs'"
+assert_contains "$(<"$empty_project_dir/.env.agent.tpl")" "ANALYZE_ENV_OP_ITEM='prod.env'"
 assert_contains "$(<"$empty_project_dir/.env.agent.tpl")" "DATABASE_URL='op://Gibbs/prod.env/DATABASE_URL'"
 
 success_project_dir="$tmp_dir/success-project"

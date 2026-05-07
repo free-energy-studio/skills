@@ -1,6 +1,8 @@
 # Minimal agent environment. Do not commit .env.agent or paste injected values
-# into chat. Prefer passing scripts/sync --op-vault/--op-item rather than
-# exporting ANALYZE_ENV_OP_VAULT or ANALYZE_ENV_OP_ITEM.
+# into chat. scripts/sync replaces these placeholders from --op-vault/--op-item
+# and can read the rendered values from this template on later runs.
+ANALYZE_ENV_OP_VAULT='{{ANALYZE_ENV_OP_VAULT}}'
+ANALYZE_ENV_OP_ITEM='{{ANALYZE_ENV_OP_ITEM}}'
 
 # scripts/query reads PROD_DATABASE_URL by default and adds read-only PostgreSQL
 # session options before connecting.
