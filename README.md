@@ -16,6 +16,9 @@ bun ralph 25          # run the agent loop (25 iterations max)
 ### `/twilio` — Twilio CLI Operations
 Authenticate with Twilio, manage profiles, send messages, place calls, and inspect phone numbers or messaging services from the terminal.
 
+### `/paperclip-tickets` — Paperclip Issue Creation
+Create Paperclip tickets from agents or local machines using board API auth, runtime ID discovery, and the Paperclip issue API.
+
 ## Setup
 
 ### Requirements
